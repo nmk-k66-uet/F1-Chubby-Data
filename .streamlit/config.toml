@@ -1,0 +1,18 @@
+[theme]
+# Kích hoạt giao diện tối làm nền tảng
+base="dark"
+
+# Màu nền chính của trang web (Màu đen tuyệt đối)
+backgroundColor="#000000"
+
+# Màu nền phụ (Dành cho thanh Sidebar bên trái - Màu xám than đặc trưng của F1)
+secondaryBackgroundColor="#15151E"
+
+# Màu chữ chính (Trắng)
+textColor="#FFFFFF"
+
+# Màu nhấn chủ đạo (Dành cho thanh trượt, nút bấm đang chọn - Màu Đỏ F1)
+primaryColor="#E10600"
+
+[server]
+runOnSave = true

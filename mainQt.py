@@ -47,11 +47,11 @@ class F1Dashboard(QMainWindow):
         # --- PANEL ĐIỀU KHIỂN ---
         control_layout = QHBoxLayout()
         self.year_combo = QComboBox()
-        self.year_combo.addItems(["2024", "2023", "2022"])
+        self.year_combo.addItems(["2026", "2025", "2024", "2023", "2022", "2021", "2020", "2019", "2018"])
         self.gp_combo = QComboBox()
-        self.gp_combo.addItems(["Bahrain", "Saudi Arabia", "Australia", "Japan"])
+        self.gp_combo.addItems(["Australia", "China", "Japan", "Bahrain", "Saudi Arabia", "Miami", "Emilia-Romagna", "Monaco", "Spain", "Canada", "Austria", "Great Britain", "Belgium", "Hungary", "Netherlands", "Italy", "Azerbaijan", "Singapore", "United States", "Mexico", "Brazil", "Las Vegas", "Qatar", "Abu Dhabi"])
         self.session_combo = QComboBox()
-        self.session_combo.addItems(["R", "Q"])
+        self.session_combo.addItems(["FP1", "FP2", "FP3", "Q", "S", "SS", "SQ", "R"])
         
         self.btn_load = QPushButton("Tải Dữ Liệu")
         self.btn_load.clicked.connect(self.load_data)
