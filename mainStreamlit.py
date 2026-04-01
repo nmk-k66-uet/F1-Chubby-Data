@@ -25,7 +25,7 @@ def load_f1_session(year, gp, session_type):
 
 # --- SIDEBAR ĐIỀU KHIỂN ---
 st.sidebar.header("Data Configuration")
-selected_year = st.sidebar.selectbox("Season:", [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018], index=2)
+selected_year = st.sidebar.selectbox("Season:", [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018], index=0)
 selected_gp = st.sidebar.selectbox("Grand Prix:", ["Australia", "China", "Japan", "Bahrain", "Saudi Arabia", "Miami", "Emilia-Romagna", "Monaco", "Spain", "Canada", "Austria", "Great Britain", "Belgium", "Hungary", "Netherlands", "Italy", "Azerbaijan", "Singapore", "United States", "Mexico", "Brazil", "Las Vegas", "Qatar", "Abu Dhabi"], index=3)
 selected_session = st.sidebar.selectbox("Session:", ["FP1", "FP2", "FP3", "Q", "S", "SS", "SQ", "R"], index=7)
 

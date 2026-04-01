@@ -8,34 +8,35 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.express as px
 
-# --- CẤU HÌNH TRANG & CACHE ---
+# --- PAGE CONFIG & CACHE ---
 st.set_page_config(page_title="F1 Pulse Interactive Dashboard", layout="wide", page_icon="🏎️")
 fastf1.Cache.enable_cache('f1_cache')
 fastf1.plotting.setup_mpl(mpl_timedelta_support=False)
 
-# Khởi tạo Session State để điều hướng trang
+# Initialize Session State for navigation
 if 'current_page' not in st.session_state:
     st.session_state['current_page'] = 'home'
 if 'selected_event' not in st.session_state:
     st.session_state['selected_event'] = None
 if 'selected_year' not in st.session_state:
-    st.session_state['selected_year'] = 2024
+    st.session_state['selected_year'] = 2026
 
-# --- TỪ ĐIỂN CỜ QUỐC GIA ---
-FLAG_MAP = {
-    "Bahrain": "🇧🇭", "Saudi Arabia": "🇸🇦", "Australia": "🇦🇺", "Japan": "🇯🇵", 
-    "China": "🇨🇳", "USA": "🇺🇸", "United States": "🇺🇸", "Miami": "🇺🇸", 
-    "Italy": "🇮🇹", "Monaco": "🇲🇨", "Spain": "🇪🇸", "Canada": "🇨🇦", 
-    "Austria": "🇦🇹", "UK": "🇬🇧", "Great Britain": "🇬🇧", "Hungary": "🇭🇺", 
-    "Belgium": "🇧🇪", "Netherlands": "🇳🇱", "Singapore": "🇸🇬", 
-    "Azerbaijan": "🇦🇿", "Mexico": "🇲🇽", "Brazil": "🇧🇷", "Las Vegas": "🇺🇸", 
-    "Qatar": "🇶🇦", "Abu Dhabi": "🇦🇪", "UAE": "🇦🇪"
+# --- COUNTRY CODES (For FlagCDN API) ---
+COUNTRY_CODES = {
+    "Bahrain": "bh", "Saudi Arabia": "sa", "Australia": "au", "Japan": "jp", 
+    "China": "cn", "USA": "us", "United States": "us", "Miami": "us", 
+    "Italy": "it", "Monaco": "mc", "Spain": "es", "Canada": "ca", 
+    "Austria": "at", "UK": "gb", "United Kingdom": "gb", "Hungary": "hu", 
+    "Belgium": "be", "Netherlands": "nl", "Singapore": "sg", 
+    "Azerbaijan": "az", "Mexico": "mx", "Brazil": "br", "Las Vegas": "us", 
+    "Qatar": "qa", "Abu Dhabi": "ae", "United Arab Emirates": "ae"
 }
 
-def get_flag(country_name):
-    return FLAG_MAP.get(country_name, "🏁")
+def get_flag_url(country_name):
+    code = COUNTRY_CODES.get(country_name, "un") # Returns UN flag if not found
+    return f"https://flagcdn.com/h40/{code}.png"
 
-# --- HÀM TẢI DỮ LIỆU ---
+# --- DATA LOADING FUNCTIONS ---
 @st.cache_data(show_spinner=False)
 def get_schedule(year):
     try:
@@ -61,52 +62,58 @@ def load_f1_session(year, round_num, session_type):
         session.load(telemetry=True, weather=False)
         return session
     except Exception as e:
-        st.error(f"Lỗi tải dữ liệu Session: {e}")
+        st.error(f"Error loading session data: {e}")
         return None
 
 @st.cache_data(show_spinner=False)
 def get_event_highlights(year, round_num):
-    """Hàm tải trước thông tin Highlight (Winner, Pole, Fastest Lap) của chặng đua."""
-    highlights = {"winner": "N/A", "pole": "N/A", "fastest_lap": "N/A"}
+    """Fetches key highlights (Winner, Pole, Fastest Lap) for the event."""
+    highlights = {"winner": "N/A", "pole": "N/A", "fastest_lap_driver": "N/A", "fastest_lap_time": ""}
     try:
-        # Lấy Winner & Fastest Lap từ phiên đua chính (R)
+        # Get Race Results & Fastest Lap
         race = fastf1.get_session(year, round_num, 'R')
         race.load(telemetry=False, weather=False, messages=False)
         
         if not race.results.empty:
             highlights["winner"] = race.results.iloc[0]['FullName']
-            
-            # Tìm Fastest Lap
             fastest_lap = race.laps.pick_fastest()
             if not pd.isnull(fastest_lap['LapTime']):
                 driver = fastest_lap['Driver']
-                time_str = str(fastest_lap['LapTime']).split()[-1][:9] # Cắt lấy hh:mm:ss.xxx
-                highlights["fastest_lap"] = f"{driver} ({time_str})"
+                # Tính toán format mm:ss.xxx từ Timedelta
+                ts = fastest_lap['LapTime'].total_seconds()
+                m = int(ts // 60)
+                s = ts % 60
+                highlights["fastest_lap_driver"] = driver
+                highlights["fastest_lap_time"] = f"{m:02d}:{s:06.3f}"
 
-        # Lấy Pole Position từ phiên phân hạng (Q)
+        # Get Pole Position from Qualifying
         qualy = fastf1.get_session(year, round_num, 'Q')
         qualy.load(telemetry=False, weather=False, messages=False)
         if not qualy.results.empty:
             highlights["pole"] = qualy.results.iloc[0]['FullName']
             
-    except Exception as e:
-        pass # Bỏ qua lỗi nếu chặng đua chưa diễn ra hoặc thiếu dữ liệu
+    except Exception:
+        pass 
     return highlights
 
 # ==========================================
-# GIAO DIỆN TRANG CHỦ (GRID LAYOUT)
+# HOME PAGE (GRID LAYOUT)
 # ==========================================
 def render_home_page():
-    st.title("🏎️ F1 Pulse - Race Calendar & Results")
-    st.markdown("Khám phá lịch thi đấu, kết quả các chặng và phân tích chuyên sâu.")
-
-    col_sel, _, _ = st.columns([1, 2, 2])
+    # --- HEADER: TITLE LEFT - SELECTOR RIGHT ---
+    col_title, col_sel = st.columns([3, 1])
+    
+    with col_title:
+        st.title("🏎️ F1 Pulse")
+        st.markdown("Explore race schedules, results, and in-depth performance analysis.")
+        
     with col_sel:
-        # Giữ lại năm đã chọn nếu quay lại từ trang chi tiết
+        st.markdown("<br>", unsafe_allow_html=True)
         selected_year = st.selectbox(
-            "📅 Lựa chọn mùa giải:", 
+            "📅 Select Season:", 
             [2026, 2025, 2024, 2023, 2022, 2021], 
-            index=[2026, 2025, 2024, 2023, 2022, 2021].index(st.session_state['selected_year'])
+            index=[2026, 2025, 2024, 2023, 2022, 2021].index(st.session_state['selected_year']),
+            label_visibility="collapsed"
         )
         st.session_state['selected_year'] = selected_year
 
@@ -114,7 +121,7 @@ def render_home_page():
     events_df = get_schedule(selected_year)
 
     if not events_df.empty:
-        st.subheader(f"Lịch thi đấu & Kết quả mùa giải {selected_year}")
+        st.subheader(f"Race Calendar & Results - Season {selected_year}")
         
         for i in range(0, len(events_df), 3):
             cols = st.columns(3)
@@ -126,7 +133,7 @@ def render_home_page():
                     round_num = event['RoundNumber']
                     event_name = event['EventName']
                     country = event['Country']
-                    flag = get_flag(country)
+                    flag_url = get_flag_url(country)
                     
                     event_date = event['EventDate']
                     if pd.notna(event_date):
@@ -139,24 +146,24 @@ def render_home_page():
                     
                     with col:
                         with st.container(border=True):
-                            st.markdown(f"#### {flag} Round {round_num}")
+                            st.markdown(f"<h4 style='margin-bottom:0;'><img src='{flag_url}' width='32' style='border-radius:4px; vertical-align:middle; margin-right:10px; box-shadow: 0 0 2px rgba(255,255,255,0.3);'> Round {round_num}</h4>", unsafe_allow_html=True)
+                            
                             st.markdown(f"**{event_name}**")
                             st.caption(f"📍 {event['Location']}, {country} | 🗓️ {date_str}")
                             st.divider()
                             
                             if is_completed:
-                                st.markdown("🟢 **Trạng thái:** Đã diễn ra")
+                                st.markdown("🟢 **Status:** Completed")
                                 winner = get_race_winner(selected_year, round_num)
                                 st.markdown(f"🏆 **Winner:** {winner}")
                             else:
-                                st.markdown("⏳ **Trạng thái:** Sắp tới")
+                                st.markdown("⏳ **Status:** Upcoming")
                                 if format_type in ['Sprint', 'Sprint_qualifying']:
                                     st.markdown("🏎️ **Format:** Sprint Weekend")
                                 else:
                                     st.markdown("🏎️ **Format:** Conventional")
                             
-                            # Xử lý sự kiện bấm nút: Lưu thông tin event và chuyển trang
-                            if st.button(f"Phân tích chặng này", key=f"btn_{selected_year}_{round_num}", use_container_width=True, disabled=not is_completed):
+                            if st.button(f"Analyze", key=f"btn_{selected_year}_{round_num}", width='stretch', disabled=not is_completed):
                                 st.session_state['selected_event'] = {
                                     'year': selected_year,
                                     'round': round_num,
@@ -164,88 +171,112 @@ def render_home_page():
                                     'country': country
                                 }
                                 st.session_state['current_page'] = 'details'
-                                st.rerun() # Tải lại trang ngay lập tức
+                                st.rerun()
     else:
-        st.warning("Không tìm thấy dữ liệu lịch thi đấu cho mùa giải này.")
+        st.warning("No schedule data found for this season.")
 
 
 # ==========================================
-# GIAO DIỆN TRANG CHI TIẾT (EVENT DETAILS)
+# EVENT DETAILS PAGE
 # ==========================================
 def render_details_page():
     event_info = st.session_state['selected_event']
     year = event_info['year']
     round_num = event_info['round']
     event_name = event_info['name']
-    flag = get_flag(event_info['country'])
-
-    # Nút Quay Lại
-    if st.button("⬅️ Quay lại Danh sách chặng đua"):
-        st.session_state['current_page'] = 'home'
-        st.rerun()
+    flag_url = get_flag_url(event_info['country'])
 
     st.divider()
 
-    # --- HEADER: TÊN CHẶNG & CHỌN SESSION ---
-    col_title, col_session = st.columns([3, 1])
-    
+    # --- HEADER: BACK ARROW + TITLE + SESSION SELECTOR ---
+    col_back, col_title, col_session = st.columns([0.15, 3.5, 1.2])
+
+    with col_back:
+        st.write("") # Vertical alignment padding
+        if st.button("⬅️", key="back_home_btn"):
+            st.session_state['current_page'] = 'home'
+            st.rerun()
+
     with col_title:
-        st.markdown(f"## {flag} {event_name} {year}")
+        st.markdown(f"<h2 style='margin-top: 0;'><img src='{flag_url}' width='48' style='border-radius:6px; vertical-align:middle; margin-right:15px; box-shadow: 0 0 4px rgba(255,255,255,0.3);'> {event_name} {year}</h2>", unsafe_allow_html=True)
     
     with col_session:
-        # Lấy lịch trình của chặng này để điền vào Combo box Session
         schedule = fastf1.get_event_schedule(year)
         event_row = schedule[schedule['RoundNumber'] == round_num].iloc[0]
         
-        # Tạo danh sách session dựa vào format (Sprint hay Thường)
         available_sessions = []
         format_type = event_row.get('EventFormat', 'conventional').lower()
         
         if format_type == 'sprint':
             available_sessions = ["Sprint", "Sprint Shootout", "Qualifying", "Race"]
             session_map = {"Sprint": "S", "Sprint Shootout": "SS", "Qualifying": "Q", "Race": "R"}
-        elif format_type == 'sprint_qualifying': # Format mới từ 2024
+        elif format_type == 'sprint_qualifying': 
             available_sessions = ["Sprint Qualifying", "Sprint", "Qualifying", "Race"]
             session_map = {"Sprint Qualifying": "SQ", "Sprint": "S", "Qualifying": "Q", "Race": "R"}
         else:
             available_sessions = ["FP1", "FP2", "FP3", "Qualifying", "Race"]
             session_map = {"FP1": "FP1", "FP2": "FP2", "FP3": "FP3", "Qualifying": "Q", "Race": "R"}
 
-        # Mặc định chọn Race (phiên cuối cùng)
-        selected_session_name = st.selectbox("Chọn Phiên (Session):", available_sessions, index=len(available_sessions)-1, label_visibility="collapsed")
+        selected_session_name = st.selectbox("Select Session:", available_sessions, index=len(available_sessions)-1, label_visibility="collapsed")
         session_code = session_map[selected_session_name]
 
-    # --- 3 THẺ HIGHLIGHTS CHUẨN FORMULA 1 ---
-    with st.spinner("Đang tải thông số nổi bật của chặng đua..."):
+    # --- HIGHLIGHT CARDS ---
+    with st.spinner("Loading event highlights..."):
         highlights = get_event_highlights(year, round_num)
         
     col_win, col_pole, col_fast = st.columns(3)
     
     with col_win:
         with st.container(border=True):
-            st.markdown("<p style='text-align: center; color: gray; margin-bottom: 0px;'>RACE WINNER</p>", unsafe_allow_html=True)
-            st.markdown(f"<h3 style='text-align: center; margin-top: 0px;'>🏆 {highlights['winner']}</h3>", unsafe_allow_html=True)
+            st.markdown(f"""
+            <div style='display: flex; justify-content: space-between; align-items: flex-start;'>
+                <div>
+                    <div style='color: #888; font-size: 0.85rem; font-weight: bold; letter-spacing: 1px;'>RACE WINNER</div>
+                    <div style='font-size: 1.6rem; font-weight: bold; margin-top: 5px;'>{highlights['winner']}</div>
+                    <div style='font-size: 1.1rem; margin-top: 2px; visibility: hidden;'>&nbsp;</div>
+                </div>
+                <div style='font-size: 2.2rem; opacity: 0.9;'>🏆</div>
+            </div>
+            """, unsafe_allow_html=True)
             
     with col_pole:
         with st.container(border=True):
-            st.markdown("<p style='text-align: center; color: gray; margin-bottom: 0px;'>POLE POSITION</p>", unsafe_allow_html=True)
-            st.markdown(f"<h3 style='text-align: center; margin-top: 0px;'>⏱️ {highlights['pole']}</h3>", unsafe_allow_html=True)
+            st.markdown(f"""
+            <div style='display: flex; justify-content: space-between; align-items: flex-start;'>
+                <div>
+                    <div style='color: #888; font-size: 0.85rem; font-weight: bold; letter-spacing: 1px;'>POLE POSITION</div>
+                    <div style='font-size: 1.6rem; font-weight: bold; margin-top: 5px;'>{highlights['pole']}</div>
+                    <div style='font-size: 1.1rem; margin-top: 2px; visibility: hidden;'>&nbsp;</div>
+                </div>
+                <div style='font-size: 2.2rem; opacity: 0.9;'>⏱️</div>
+            </div>
+            """, unsafe_allow_html=True)
             
     with col_fast:
         with st.container(border=True):
-            st.markdown("<p style='text-align: center; color: gray; margin-bottom: 0px;'>FASTEST LAP</p>", unsafe_allow_html=True)
-            st.markdown(f"<h3 style='text-align: center; margin-top: 0px;'>🚀 {highlights['fastest_lap']}</h3>", unsafe_allow_html=True)
+            # Nếu không có data thời gian (ví dụ chặng chưa đua), cũng hiện dòng tàng hình để giữ form
+            time_html = f"<div style='font-size: 1.1rem; color: white; margin-top: 2px; font-family: monospace;'>{highlights['fastest_lap_time']}</div>" if highlights['fastest_lap_time'] else "<div style='font-size: 1.1rem; margin-top: 2px; visibility: hidden;'>&nbsp;</div>"
+            st.markdown(f"""
+            <div style='display: flex; justify-content: space-between; align-items: flex-start;'>
+                <div>
+                    <div style='color: #888; font-size: 0.85rem; font-weight: bold; letter-spacing: 1px;'>FASTEST LAP</div>
+                    <div style='font-size: 1.6rem; font-weight: bold; margin-top: 5px;'>{highlights['fastest_lap_driver']}</div>
+                    {time_html}
+                </div>
+                <div style='font-size: 2.2rem; opacity: 0.9;'>🚀</div>
+            </div>
+            """, unsafe_allow_html=True)
 
     st.divider()
 
-    # --- TẢI DỮ LIỆU CỦA SESSION ĐÃ CHỌN ---
-    with st.spinner(f"Đang tải dữ liệu chi tiết cho phiên {selected_session_name}..."):
+    # --- SESSION DATA PROCESSING ---
+    with st.spinner(f"Loading session details for {selected_session_name}..."):
         session = load_f1_session(year, round_num, session_code)
 
     if session is not None:
         drivers = session.results['Abbreviation'].dropna().unique().tolist()
 
-        # --- 6 TABS PHÂN TÍCH CHUYÊN SÂU ---
+        # --- TABS ---
         tab_res, tab_pos, tab_strat, tab_laps, tab_dom, tab_tel = st.tabs([
             "📊 Results", 
             "📈 Positions", 
@@ -256,12 +287,10 @@ def render_details_page():
         ])
         
         with tab_res:
-            st.subheader(f"Kết quả phân hạng/đua - {selected_session_name}")
+            st.subheader(f"Results - {selected_session_name}")
             
             res_df = session.results.copy()
             formatted_times = []
-            
-            # Lấy thời gian của người dẫn đầu (Winner) để kiểm tra
             winner_time = pd.NaT
             if not res_df.empty and pd.notna(res_df.iloc[0]['Time']):
                 winner_time = res_df.iloc[0]['Time']
@@ -271,42 +300,26 @@ def render_details_page():
                 time_val = row['Time']
                 status = str(row['Status'])
                 
-                # NẾU LÀ PHIÊN PHÂN HẠNG (QUALIFYING)
                 if session_code in ['Q', 'SQ']:
                     best_q = row.get('Q3', pd.NaT)
                     if pd.isna(best_q): best_q = row.get('Q2', pd.NaT)
                     if pd.isna(best_q): best_q = row.get('Q1', pd.NaT)
-                    
                     if pd.notna(best_q):
                         q_sec = best_q.total_seconds()
-                        minutes = int(q_sec // 60)
-                        seconds = int(q_sec % 60)
-                        # Format mm:ss không có thập phân
-                        formatted_times.append(f"{minutes:02d}:{seconds:02d}")
+                        formatted_times.append(f"{int(q_sec // 60):02d}:{int(q_sec % 60):02d}")
                     else:
                         formatted_times.append(status)
-                        
-                # NẾU LÀ PHIÊN ĐUA CHÍNH (RACE / SPRINT)
                 else:
                     if pd.isna(time_val):
-                        # Bị bắt vòng hoặc Bỏ cuộc (Hiển thị Status)
                         formatted_times.append(status)
                     elif pos == 1 or pd.isna(winner_time):
-                        # P1: Định dạng tổng thời gian hh:mm:ss
                         total_seconds = time_val.total_seconds()
-                        hours = int(total_seconds // 3600)
-                        minutes = int((total_seconds % 3600) // 60)
-                        seconds = int(total_seconds % 60)
-                        formatted_times.append(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+                        h, m, s = int(total_seconds // 3600), int((total_seconds % 3600) // 60), int(total_seconds % 60)
+                        formatted_times.append(f"{h:02d}:{m:02d}:{s:02d}")
                     else:
-                        # P2 trở đi: time_val ĐÃ LÀ KHOẢNG CÁCH (Gap) trong FastF1
                         gap_seconds = time_val.total_seconds()
-                        minutes = int(gap_seconds // 60)
-                        seconds = int(gap_seconds % 60)
-                        # Format +mm:ss không có thập phân
-                        formatted_times.append(f"+{minutes:02d}:{seconds:02d}")
+                        formatted_times.append(f"+{int(gap_seconds // 60):02d}:{int(gap_seconds % 60):02d}")
             
-            # Xây dựng DataFrame cuối cùng
             display_df = pd.DataFrame({
                 'Pos': res_df['Position'].astype(str).str.replace('.0', '', regex=False),
                 'Driver': res_df['FullName'],
@@ -314,470 +327,291 @@ def render_details_page():
                 'Grid': res_df['GridPosition'].astype(str).str.replace('.0', '', regex=False),
                 'Status': res_df['Status'],
                 'Time': formatted_times,
-                'Point': res_df['Points'].astype(str).str.replace('.0', '', regex=False)
+                'Points': res_df['Points'].astype(str).str.replace('.0', '', regex=False)
             })
-            
-            display_df = display_df.replace('nan', 'N/A')
-            
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            st.dataframe(display_df.replace('nan', 'N/A'), width='stretch', hide_index=True)
             
         with tab_pos:
-            # Tạo 3 tab con (Sub-tabs) bên trong tab Positions
-            sub_chart, sub_rc, sub_analysis = st.tabs([
-                "📈 Position Chart", 
-                "🚨 Race Control", 
-                "📊 Analysis"
-            ])
+            sub_chart, sub_rc, sub_analysis = st.tabs(["📈 Position Chart", "🚨 Race Control", "📊 Analysis"])
             
-            # -----------------------------------------
-            # SUB-TAB 1: POSITION CHART (Lap-by-Lap)
-            # -----------------------------------------
             with sub_chart:
                 col_title, col_filter = st.columns([3, 1])
                 with col_title:
                     st.subheader(f"Lap-by-Lap Position Changes - {selected_session_name}")
-                    st.caption("Ghi chú: Trong cùng một đội, tay đua thứ hai sẽ được hiển thị bằng nét đứt (dashed line).")
-                    
+                    st.caption("Note: Within a team, the second driver is shown with a dashed line.")
                 with col_filter:
-                    with st.expander("🔍 Lọc tay đua (Checkboxes)", expanded=False):
-                        select_all = st.checkbox("Chọn tất cả", value=True, key="select_all_pos")
-                        selected_drivers = []
-                        for drv in drivers:
-                            if st.checkbox(drv, value=select_all, key=f"check_{drv}"):
-                                selected_drivers.append(drv)
+                    with st.expander("🔍 Filter Drivers", expanded=False):
+                        select_all = st.checkbox("Select All", value=True, key="sel_all_pos")
+                        selected_drivers = [drv for drv in drivers if st.checkbox(drv, value=select_all, key=f"ch_{drv}")]
 
                 if not selected_drivers:
-                    st.warning("👈 Vui lòng tick chọn ít nhất một tay đua.")
+                    st.warning("👈 Please select at least one driver.")
                 else:
                     fig_pos = go.Figure()
-                    all_laps = session.laps
                     team_count = {}
-
                     for drv in selected_drivers:
-                        drv_laps = all_laps.pick_drivers(drv).dropna(subset=['Position'])
+                        drv_laps = session.laps.pick_drivers(drv).dropna(subset=['Position'])
                         if not drv_laps.empty:
-                            driver_info = session.get_driver(drv)
-                            team_name = driver_info['TeamName']
-                            color = f"#{driver_info['TeamColor']}"
-                            if color == "#nan" or not color: color = "white"
-                            
-                            if team_name not in team_count:
-                                line_style = 'solid'
-                                team_count[team_name] = 1
-                            else:
-                                line_style = 'dash'
-                            
-                            fig_pos.add_trace(go.Scatter(
-                                x=drv_laps['LapNumber'],
-                                y=drv_laps['Position'],
-                                mode='lines+markers',
-                                name=drv,
-                                line=dict(color=color, width=3, dash=line_style),
-                                marker=dict(size=4),
-                                hovertemplate=f"<b>{drv}</b> ({team_name})<br>Lap: %{{x}}<br>Pos: P%{{y}}<extra></extra>"
-                            ))
+                            info = session.get_driver(drv)
+                            color = f"#{info['TeamColor']}" if str(info['TeamColor']) != 'nan' else 'white'
+                            line_style = 'solid' if info['TeamName'] not in team_count else 'dash'
+                            team_count[info['TeamName']] = 1
+                            fig_pos.add_trace(go.Scatter(x=drv_laps['LapNumber'], y=drv_laps['Position'], mode='lines+markers', name=drv, line=dict(color=color, dash=line_style)))
+                    fig_pos.update_layout(yaxis=dict(autorange="reversed", tickmode='linear', dtick=1), xaxis_title="Lap", yaxis_title="Position", hovermode="x unified", height=550)
+                    st.plotly_chart(fig_pos, width='stretch')
 
-                    fig_pos.update_layout(
-                        xaxis_title="Vòng (Lap)",
-                        yaxis_title="Vị trí (Position)",
-                        yaxis=dict(autorange="reversed", tickmode='linear', dtick=1),
-                        hovermode="x unified",
-                        height=550,
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                    )
-                    st.plotly_chart(fig_pos, use_container_width=True)
-
-            # -----------------------------------------
-            # SUB-TAB 2: RACE CONTROL (Timeline Messages)
-            # -----------------------------------------
             with sub_rc:
-                st.subheader(f"FIA Race Control Timeline - {selected_session_name}")
+                st.subheader("FIA Race Control Timeline")
                 rcm_df = session.race_control_messages
-                
                 if not rcm_df.empty:
                     rcm_display = rcm_df[['Time', 'Category', 'Flag', 'Message']].copy()
-                    
-                    # Định dạng lại cột Time (Timestamp) thành chuẩn hh:mm:ss cho dễ đọc
-                    def format_rcm_time(ts):
-                        if pd.isna(ts): return ""
-                        # Gọi thẳng strftime vì ts là một đối tượng Timestamp của Pandas
-                        return ts.strftime("%H:%M:%S")
-                        
-                    rcm_display['Time'] = rcm_display['Time'].apply(format_rcm_time)
-                    st.dataframe(rcm_display, use_container_width=True, hide_index=True)
+                    rcm_display['Time'] = rcm_display['Time'].apply(lambda ts: ts.strftime("%H:%M:%S") if pd.notna(ts) else "")
+                    st.dataframe(rcm_display, width='stretch', hide_index=True)
                 else:
-                    st.info("Không có dữ liệu hoặc thông báo từ Race Control cho phiên này.")
+                    st.info("No Race Control messages found for this session.")
 
-            # -----------------------------------------
-            # SUB-TAB 3: ANALYSIS (Places Gained/Lost)
-            # -----------------------------------------
             with sub_analysis:
                 st.subheader("Places Gained/Lost Summary")
-                res_df = session.results.copy()
-                
                 analysis_data = []
-                for _, row in res_df.iterrows():
-                    pos = pd.to_numeric(row['Position'], errors='coerce')
-                    grid = pd.to_numeric(row['GridPosition'], errors='coerce')
-                    
-                    change_val = "N/A"
-                    if pd.notna(pos) and pd.notna(grid) and grid > 0:
-                        change_raw = int(grid) - int(pos)
-                        if change_raw > 0:
-                            change_val = f"↑ +{change_raw}"
-                        elif change_raw < 0:
-                            change_val = f"↓ {change_raw}"
-                        else:
-                            change_val = "- 0"
-                    elif grid == 0:
-                        change_val = "Pit Start" # Xử lý trường hợp xuất phát từ Pit Lane
-
-                    analysis_data.append({
-                        'Final Position': str(int(pos)) if pd.notna(pos) else "N/A",
-                        'Driver': row['FullName'],
-                        'Team': row['TeamName'],
-                        'Grid': str(int(grid)) if pd.notna(grid) and grid > 0 else "Pit",
-                        'Change': change_val,
-                        'Status': row['Status']
-                    })
+                for _, row in session.results.iterrows():
+                    pos, grid = pd.to_numeric(row['Position'], errors='coerce'), pd.to_numeric(row['GridPosition'], errors='coerce')
+                    change = f"↑ +{int(grid-pos)}" if grid > pos else (f"↓ {int(grid-pos)}" if grid < pos else "- 0")
+                    if grid == 0: change = "Pit Start"
+                    analysis_data.append({'Final Pos': str(int(pos)) if pd.notna(pos) else "N/A", 'Driver': row['FullName'], 'Team': row['TeamName'], 'Grid': str(int(grid)) if grid > 0 else "Pit", 'Change': change, 'Status': row['Status']})
                 
-                analysis_df = pd.DataFrame(analysis_data)
-                
-                # Hàm cấp màu sắc (CSS) cho Pandas Styler dựa trên giá trị text
-                def style_change_col(val):
-                    if isinstance(val, str):
-                        if '↑' in val:
-                            return 'color: #00cc66; font-weight: bold;' # Xanh lá
-                        elif '↓' in val:
-                            return 'color: #ff4b4b; font-weight: bold;' # Đỏ
-                        elif '- 0' in val or 'Pit' in val or 'N/A' in val:
-                            return 'color: gray;' # Xám
-                    return ''
-
-                # Áp dụng màu sắc vào dataframe (Tương thích với cả Pandas cũ và mới)
-                try:
-                    styled_df = analysis_df.style.map(style_change_col, subset=['Change'])
-                except AttributeError:
-                    styled_df = analysis_df.style.applymap(style_change_col, subset=['Change'])
-                
-                st.dataframe(styled_df, use_container_width=True, hide_index=True)
+                def style_change(val):
+                    return 'color: #00cc66; font-weight: bold;' if '↑' in str(val) else ('color: #ff4b4b; font-weight: bold;' if '↓' in str(val) else 'color: gray;')
+                st.dataframe(pd.DataFrame(analysis_data).style.map(style_change, subset=['Change']), width='stretch', hide_index=True)
             
         with tab_strat:
-            # Tạo 2 sub-tabs cho phần Strategy
             sub_overview, sub_stint = st.tabs(["📊 Strategy Overview", "📋 Stint Detail Analysis"])
-            
-            # --- CHUẨN BỊ DỮ LIỆU LAPS CHUNG ---
-            all_laps = session.laps.copy()
-            # Loại bỏ các vòng không có thông tin Stint hoặc Compound hợp lệ
-            all_laps = all_laps.dropna(subset=['Stint', 'Compound'])
-            
-            # Bảng màu chuẩn của Pirelli
-            compound_colors = {
-                'SOFT': '#FF3333',     # Đỏ
-                'MEDIUM': '#FFF200',   # Vàng
-                'HARD': '#FFFFFF',     # Trắng
-                'INTERMEDIATE': '#39B54A', # Xanh lá
-                'WET': '#00AEEF',      # Xanh dương
-                'UNKNOWN': '#808080'   # Xám
-            }
+            all_laps = session.laps.copy().dropna(subset=['Stint', 'Compound'])
+            compound_colors = {'SOFT': '#FF3333', 'MEDIUM': '#FFF200', 'HARD': '#FFFFFF', 'INTERMEDIATE': '#39B54A', 'WET': '#00AEEF'}
 
-            # -----------------------------------------
-            # SUB-TAB 1: STRATEGY OVERVIEW (Bar Chart)
-            # -----------------------------------------
             with sub_overview:
-                st.subheader(f"Tire Strategy & Stint Timeline - {selected_session_name}")
-                st.markdown("Biểu đồ thể hiện chiến thuật sử dụng lốp của các tay đua. Được sắp xếp theo vị trí cán đích từ trên xuống dưới.")
-                
-                # Lấy danh sách tay đua theo thứ tự cán đích từ session.results
+                st.subheader("Tire Strategy Timeline")
                 finish_order = session.results['Abbreviation'].dropna().tolist()
-                
-                if finish_order and not all_laps.empty:
-                    # Gom nhóm dữ liệu theo Driver, Stint, Compound để tính độ dài Stint
-                    stints = all_laps.groupby(['Driver', 'Stint', 'Compound']).agg(
-                        StartLap=('LapNumber', 'min'),
-                        EndLap=('LapNumber', 'max'),
-                        StintLength=('LapNumber', 'count')
-                    ).reset_index()
-                    
-                    # Lọc chỉ lấy những tay đua có trong finish_order và ép kiểu sắp xếp
-                    stints = stints[stints['Driver'].isin(finish_order)]
+                if not all_laps.empty:
+                    stints = all_laps.groupby(['Driver', 'Stint', 'Compound']).agg(StartLap=('LapNumber', 'min'), EndLap=('LapNumber', 'max'), StintLength=('LapNumber', 'count')).reset_index()
                     stints['Driver'] = pd.Categorical(stints['Driver'], categories=finish_order, ordered=True)
-                    stints = stints.sort_values(['Driver', 'Stint'])
-                    
-                    # Dùng Plotly Express vẽ Bar chart nằm ngang (Gantt chart)
-                    fig_strat = px.bar(
-                        stints,
-                        x='StintLength',
-                        y='Driver',
-                        color='Compound',
-                        color_discrete_map=compound_colors,
-                        orientation='h',
-                        hover_data={
-                            'StintLength': False, # Ẩn cột mặc định
-                            'StartLap': True,
-                            'EndLap': True,
-                            'Stint': True,
-                            'Laps': (stints['StintLength']) # Thêm nhãn Laps rõ ràng
-                        },
-                        labels={'Driver': 'Tay đua', 'StintLength': 'Số vòng (Laps)'}
-                    )
-                    
-                    # Cập nhật giao diện: Viền đen cho các khối lốp, lật ngược trục Y
-                    fig_strat.update_traces(marker_line_color='black', marker_line_width=1, opacity=0.9)
-                    fig_strat.update_layout(
-                        yaxis=dict(autorange="reversed", title=""),
-                        xaxis=dict(title="Lap Number", showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
-                        height=max(500, len(finish_order) * 30), # Tự động giãn chiều cao theo số tay đua
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        legend_title_text="Compound"
-                    )
-                    st.plotly_chart(fig_strat, use_container_width=True)
-                else:
-                    st.info("Không đủ dữ liệu lốp để vẽ biểu đồ chiến thuật.")
+                    fig_strat = px.bar(stints.sort_values(['Driver', 'Stint']), x='StintLength', y='Driver', color='Compound', color_discrete_map=compound_colors, orientation='h', labels={'Driver': 'Driver', 'StintLength': 'Laps'})
+                    fig_strat.update_layout(yaxis=dict(autorange="reversed"), xaxis_title="Lap", height=max(500, len(finish_order)*30))
+                    st.plotly_chart(fig_strat, width='stretch')
 
-            # -----------------------------------------
-            # SUB-TAB 2: STINT DETAIL ANALYSIS (Data Table)
-            # -----------------------------------------
             with sub_stint:
                 st.subheader("Stint Performance Analysis")
-                st.markdown("Phân tích chi tiết hiệu năng của từng bộ lốp.")
-                
-                # Hàm helper định dạng thời gian Lap (mm:ss.ms)
-                def format_lap_time(td):
-                    if pd.isna(td): return "N/A"
-                    ts = td.total_seconds()
-                    m = int(ts // 60)
-                    s = ts % 60
-                    return f"{m:02d}:{s:06.3f}"
-                
                 stint_stats = []
-                
-                # Duyệt qua từng Stint của từng tay đua
                 for (driver, stint, compound), group in all_laps.groupby(['Driver', 'Stint', 'Compound']):
-                    # 1. Tính chiều dài và thông tin cơ bản
-                    length = len(group)
-                    start_lap = int(group['LapNumber'].min())
-                    end_lap = int(group['LapNumber'].max())
-                    length_str = f"{length} (L{start_lap}-L{end_lap})"
-                    
-                    # 2. Lọc các vòng hợp lệ (bỏ qua In/Out laps ở Pit hoặc vòng ảo) để tính toán chính xác
-                    valid_laps = group.dropna(subset=['LapTime'])
-                    
-                    fastest_str = "N/A"
-                    avg_str = "N/A"
-                    consist_str = "N/A"
-                    deg_str = "N/A"
-                    
-                    if not valid_laps.empty:
-                        # Thời gian nhanh nhất & Trung bình
-                        fastest_str = format_lap_time(valid_laps['LapTime'].min())
-                        avg_str = format_lap_time(valid_laps['LapTime'].mean())
-                        
-                        lap_seconds = valid_laps['LapTime'].dt.total_seconds()
-                        
-                        # --- TÍNH GIÁ TRỊ SIGMA (σ) CHO ĐỘ ỔN ĐỊNH ---
-                        if len(lap_seconds) > 1:
-                            # 1. Lọc nhiễu (Outliers): Bỏ qua các vòng dính cờ vàng, traffic hoặc lỗi nặng
-                            # Ngưỡng chấp nhận: Không chậm hơn 5% so với vòng nhanh nhất của stint
-                            threshold = valid_laps['LapTime'].min().total_seconds() * 1.05
-                            clean_laps = lap_seconds[lap_seconds <= threshold]
-                            
-                            # 2. Tính Sigma (Population Standard Deviation với ddof=0)
-                            if len(clean_laps) > 1:
-                                sigma_val = clean_laps.std(ddof=0)
-                            else:
-                                # Fallback nếu stint quá ngắn (để tránh lỗi chia cho 0)
-                                sigma_val = lap_seconds.std(ddof=0) 
-                                
-                            # Thay đổi text hiển thị thành ký hiệu σ
-                            consist_str = f"σ = {sigma_val:.3f}s"
-                        
-                        # Độ mòn lốp (Degradation) - Dùng Numpy Polyfit để tìm độ dốc (Slope)
-                        valid_deg = valid_laps.dropna(subset=['TyreLife'])
-                        if len(valid_deg) > 2:
-                            x = valid_deg['TyreLife'].astype(float)
-                            y = valid_deg['LapTime'].dt.total_seconds()
-                            try:
-                                slope, _ = np.polyfit(x, y, 1) # Tìm hệ số góc bậc 1
-                                # Nếu slope dương -> xe chậm đi (mòn lốp). Nếu âm -> xe nhanh lên do cạn xăng.
-                                deg_str = f"{slope:+.3f} s/lap" 
-                            except:
-                                pass
-                    
-                    stint_stats.append({
-                        'Driver': driver,
-                        'Stint': int(stint),
-                        'Compound': compound,
-                        'Length': length_str,
-                        'Fastest': fastest_str,
-                        'Average': avg_str,
-                        'Consist': consist_str,
-                        'Degradation': deg_str
-                    })
-                
-                if stint_stats:
-                    df_stint_stats = pd.DataFrame(stint_stats)
-                    # Sắp xếp theo tên tay đua (A-Z) và số Stint (1, 2, 3...)
-                    df_stint_stats = df_stint_stats.sort_values(by=['Driver', 'Stint']).reset_index(drop=True)
-                    
-                    # Hàm đổi màu Compound trong bảng
-                    def style_compound(val):
-                        color_map = {
-                            'SOFT': 'color: #FF3333; font-weight: bold;',
-                            'MEDIUM': 'color: #FFF200; font-weight: bold;',
-                            'HARD': 'color: white; font-weight: bold;',
-                            'INTERMEDIATE': 'color: #39B54A; font-weight: bold;',
-                            'WET': 'color: #00AEEF; font-weight: bold;'
-                        }
-                        return color_map.get(val, 'color: gray;')
-                        
-                    # Áp dụng màu cho cột Compound
-                    try:
-                        styled_stint_df = df_stint_stats.style.map(style_compound, subset=['Compound'])
-                    except AttributeError:
-                        styled_stint_df = df_stint_stats.style.applymap(style_compound, subset=['Compound'])
-
-                    st.dataframe(styled_stint_df, use_container_width=True, hide_index=True)
-                else:
-                    st.info("Không có dữ liệu chi tiết cho các Stint.")
+                    valid = group.dropna(subset=['LapTime'])
+                    fastest, avg, sigma, deg = "N/A", "N/A", "N/A", "N/A"
+                    if not valid.empty:
+                        fastest = f"{int(valid['LapTime'].min().total_seconds()//60):02d}:{valid['LapTime'].min().total_seconds()%60:06.3f}"
+                        avg = f"{int(valid['LapTime'].mean().total_seconds()//60):02d}:{valid['LapTime'].mean().total_seconds()%60:06.3f}"
+                        l_sec = valid['LapTime'].dt.total_seconds()
+                        if len(l_sec) > 1:
+                            clean = l_sec[l_sec <= l_sec.min()*1.05]
+                            sigma = f"σ = {clean.std(ddof=0):.3f}s"
+                        if len(valid.dropna(subset=['TyreLife'])) > 2:
+                            try: deg = f"{np.polyfit(valid['TyreLife'], l_sec, 1)[0]:+.3f} s/lap"
+                            except: pass
+                    stint_stats.append({'Driver': driver, 'Stint': int(stint), 'Compound': compound, 'Length': f"{len(group)} (L{int(group['LapNumber'].min())}-L{int(group['LapNumber'].max())})", 'Fastest': fastest, 'Average': avg, 'Consistency': sigma, 'Degradation': deg})
+                st.dataframe(pd.DataFrame(stint_stats).sort_values(['Driver', 'Stint']), width='stretch', hide_index=True)
             
         with tab_laps:
-            # --- KHỞI TẠO STATE QUẢN LÝ ID DUY NHẤT CHO TỪNG COMBO BOX ---
-            # Lưu danh sách các box đang hiển thị (mặc định 2 box đầu tiên)
-            if 'lt_boxes' not in st.session_state:
-                st.session_state['lt_boxes'] = ['box_0', 'box_1'] 
-            # Bộ đếm để tạo ra ID không bao giờ trùng lặp khi Add thêm
-            if 'lt_box_counter' not in st.session_state:
-                st.session_state['lt_box_counter'] = 2
-
-            # --- THIẾT KẾ GIAO DIỆN HEADER & CONTROLS ---
-            col_title, col_controls = st.columns([1, 2.5])
+            if 'lt_boxes' not in st.session_state: st.session_state['lt_boxes'] = ['box_0', 'box_1'] 
+            if 'lt_box_counter' not in st.session_state: st.session_state['lt_box_counter'] = 2
             
-            with col_title:
-                st.subheader("Lap Time Comparison")
-                st.caption(f"Phiên đua: {selected_session_name}")
-                
-            with col_controls:
-                current_boxes = st.session_state['lt_boxes']
-                n_boxes = len(current_boxes)
-                
-                # Chia cột: Mỗi ô box chiếm 1 phần, Nút Add chiếm 0.4 phần
-                col_widths = [1] * n_boxes + [0.4]
-                cols = st.columns(col_widths)
-                
-                selected_lt_drivers = []
-                
-                # Render các Combo Box lặp theo ID
-                for i, box_id in enumerate(current_boxes):
+            c_title, c_ctrl = st.columns([1, 2.5])
+            with c_title: st.subheader("Lap Time Comparison")
+            with c_ctrl:
+                boxes = st.session_state['lt_boxes']
+                n = len(boxes)
+                cols = st.columns([1]*n + [0.4])
+                sel_drivers = []
+                for i, b_id in enumerate(boxes):
                     with cols[i]:
-                        default_idx = i if i < len(drivers) else 0
-                        
-                        # LOGIC UI: TỪ 3 BOX TRỞ LÊN SẼ XUẤT HIỆN NÚT ✖
-                        if n_boxes >= 3:
-                            # Chia cột con bên trong (Combo box chiếm 4 phần, Nút ✖ chiếm 1 phần)
+                        if n >= 3:
                             sc1, sc2 = st.columns([4, 1])
-                            with sc1:
-                                drv = st.selectbox(
-                                    f"Tay đua", 
-                                    options=drivers, 
-                                    index=default_idx,
-                                    key=f"sel_{box_id}", # Dùng ID để Streamlit nhớ chính xác tay đua đã chọn
-                                    label_visibility="collapsed"
-                                )
-                            with sc2:
-                                # Nút ✖ xóa trực tiếp box ID này
-                                if st.button("✖", key=f"del_{box_id}", help="Xóa tay đua này"):
-                                    st.session_state['lt_boxes'].remove(box_id)
+                            with sc1: drv = st.selectbox("Driver", drivers, index=i%len(drivers), key=f"sel_{b_id}", label_visibility="collapsed")
+                            with sc2: 
+                                if st.button("✖", key=f"del_{b_id}"): 
+                                    st.session_state['lt_boxes'].remove(b_id)
                                     st.rerun()
-                        else:
-                            # Dưới 3 box -> Ẩn nút ✖
-                            drv = st.selectbox(
-                                f"Tay đua", 
-                                options=drivers, 
-                                index=default_idx,
-                                key=f"sel_{box_id}", 
-                                label_visibility="collapsed"
-                            )
-                            
-                        selected_lt_drivers.append(drv)
-                
-                # Render nút Add (Cột cuối cùng)
+                        else: drv = st.selectbox("Driver", drivers, index=i%len(drivers), key=f"sel_{b_id}", label_visibility="collapsed")
+                        sel_drivers.append(drv)
                 with cols[-1]:
-                    if st.button("➕ Add", disabled=n_boxes >= 6, use_container_width=True, help="Thêm tay đua để so sánh"):
-                        # Tạo ID mới và nạp vào danh sách
-                        new_id = f"box_{st.session_state['lt_box_counter']}"
-                        st.session_state['lt_boxes'].append(new_id)
+                    if st.button("➕", disabled=n >= 6):
+                        st.session_state['lt_boxes'].append(f"box_{st.session_state['lt_box_counter']}")
                         st.session_state['lt_box_counter'] += 1
                         st.rerun()
 
+            unique_drv = list(dict.fromkeys(sel_drivers))
+            if unique_drv:
+                fig_l = go.Figure()
+                for drv in unique_drv:
+                    d_laps = session.laps.pick_drivers(drv).dropna(subset=['LapTime'])
+                    if not d_laps.empty:
+                        c = f"#{session.get_driver(drv)['TeamColor']}" if str(session.get_driver(drv)['TeamColor']) != 'nan' else 'white'
+                        fig_l.add_trace(go.Scatter(x=d_laps['LapNumber'], y=d_laps['LapTime'].dt.total_seconds(), mode='lines+markers', name=drv, line=dict(color=c, width=2, shape='spline')))
+                fig_l.update_layout(xaxis_title="Lap", yaxis_title="Time (s)", hovermode="x unified", height=600)
+                st.plotly_chart(fig_l, width='stretch')
+
+        with tab_dom:
+            # ==========================================
+            # TOP HALF: TRACK DOMINANCE & SPEED TRACE
+            # ==========================================
+            col_title, col_ctrls = st.columns([1.2, 2.8])
+            
+            with col_title:
+                st.subheader("Track Dominance & Speed Trace")
+                st.caption("Compare corner-by-corner dominance and speed.")
+                
+            with col_ctrls:
+                c1, c2, c3, c4, c5 = st.columns([2, 2, 0.5, 2, 2])
+                with c1: drv1 = st.selectbox("Driver 1", drivers, index=0, key="dom_d1")
+                with c2:
+                    laps1 = session.laps.pick_drivers(drv1)['LapNumber'].dropna().astype(int).tolist()
+                    lap_opts1 = ["Fastest"] + [f"Lap {l}" for l in laps1]
+                    sel_lap1 = st.selectbox("Lap 1", lap_opts1, index=0, key="dom_l1")
+                with c3: st.markdown("<div style='text-align: center; font-weight: bold; font-size: 1.2rem; margin-top: 35px;'>VS</div>", unsafe_allow_html=True)
+                with c4: drv2 = st.selectbox("Driver 2", drivers, index=1 if len(drivers)>1 else 0, key="dom_d2")
+                with c5:
+                    laps2 = session.laps.pick_drivers(drv2)['LapNumber'].dropna().astype(int).tolist()
+                    lap_opts2 = ["Fastest"] + [f"Lap {l}" for l in laps2]
+                    sel_lap2 = st.selectbox("Lap 2", lap_opts2, index=0, key="dom_l2")
+
             st.divider()
 
-            # --- VẼ ĐỒ THỊ LAP TIMES ---
-            unique_drivers = list(dict.fromkeys(selected_lt_drivers))
-            
-            if unique_drivers:
-                fig_laps = go.Figure()
-                all_laps = session.laps
+            # --- DATA PROCESSING FOR DOMINANCE ---
+            try:
+                def get_lap_data(drv, sel):
+                    drv_laps = session.laps.pick_drivers(drv)
+                    if sel == "Fastest": return drv_laps.pick_fastest()
+                    else: return drv_laps[drv_laps['LapNumber'] == int(sel.replace("Lap ", ""))].iloc[0]
+
+                lap1 = get_lap_data(drv1, sel_lap1)
+                lap2 = get_lap_data(drv2, sel_lap2)
                 
-                for drv in unique_drivers:
-                    drv_laps = all_laps.pick_drivers(drv).dropna(subset=['LapTime'])
+                if pd.isna(lap1['LapTime']) or pd.isna(lap2['LapTime']):
+                    st.warning("Selected laps do not have valid telemetry data. Please select different laps.")
+                else:
+                    tel1 = lap1.get_telemetry()
+                    tel2 = lap2.get_telemetry()
                     
-                    if not drv_laps.empty:
-                        driver_info = session.get_driver(drv)
-                        color = f"#{driver_info['TeamColor']}"
-                        if color == "#nan" or not color: color = "white"
+                    # Resolve Colors
+                    c1 = f"#{session.get_driver(drv1)['TeamColor']}" if str(session.get_driver(drv1)['TeamColor']) != 'nan' else 'white'
+                    c2 = f"#{session.get_driver(drv2)['TeamColor']}" if str(session.get_driver(drv2)['TeamColor']) != 'nan' else 'white'
+                    if c1 == c2: c2 = "#00FFFF" # Cyan fallback
                         
-                        lap_seconds = drv_laps['LapTime'].dt.total_seconds()
+                    # Calculate Mini-sectors 
+                    num_sectors = 50
+                    max_dist = max(tel1['Distance'].max(), tel2['Distance'].max())
+                    sector_length = max_dist / num_sectors
+                    
+                    tel1['MiniSector'] = (tel1['Distance'] // sector_length).astype(int)
+                    tel2['MiniSector'] = (tel2['Distance'] // sector_length).astype(int)
+                    
+                    sectors = pd.DataFrame({'S1': tel1.groupby('MiniSector')['Speed'].mean(), 'S2': tel2.groupby('MiniSector')['Speed'].mean()}).fillna(0)
+                    
+                    # Neutral if difference <= 2 km/h
+                    conditions = [abs(sectors['S1'] - sectors['S2']) <= 2.0, sectors['S1'] > sectors['S2']]
+                    sectors['Dominant'] = np.select(conditions, [0, 1], default=2)
+                    tel1['Dominant'] = tel1['MiniSector'].map(sectors['Dominant'])
+                    
+                    # --- PLOTTING TOP HALF ---
+                    col_map, col_speed = st.columns(2)
+                    
+                    with col_map:
+                        fig_map = go.Figure()
+                        tel1['Block'] = (tel1['Dominant'] != tel1['Dominant'].shift(1)).cumsum()
+                        block_ids = tel1['Block'].unique()
+                        show_leg1, show_leg2, show_leg0 = True, True, True
                         
-                        formatted_times = drv_laps['LapTime'].apply(
-                            lambda x: f"{int(x.total_seconds() // 60):02d}:{x.total_seconds() % 60:06.3f}"
-                        )
+                        for i, b in enumerate(block_ids):
+                            group = tel1[tel1['Block'] == b].copy()
+                            if i < len(block_ids) - 1:
+                                group = pd.concat([group, tel1[tel1['Block'] == block_ids[i+1]].iloc[0:1]])
+                                
+                            dom_val = group['Dominant'].iloc[0]
+                            color, drv_name = ("#FFFF00", "Neutral") if dom_val == 0 else (c1, f"{drv1} Faster") if dom_val == 1 else (c2, f"{drv2} Faster")
+                            
+                            show_leg = False
+                            if dom_val == 1 and show_leg1: show_leg = True; show_leg1 = False
+                            elif dom_val == 2 and show_leg2: show_leg = True; show_leg2 = False
+                            elif dom_val == 0 and show_leg0: show_leg = True; show_leg0 = False
+                                
+                            fig_map.add_trace(go.Scatter(x=group['X'], y=group['Y'], mode='lines', line=dict(color=color, width=8), name=drv_name, showlegend=show_leg, hoverinfo='skip'))
                         
-                        fig_laps.add_trace(go.Scatter(
-                            x=drv_laps['LapNumber'],
-                            y=lap_seconds,
-                            mode='lines+markers',
-                            name=drv,
-                            # THÊM shape='spline' VÀO ĐÂY ĐỂ VUỐT MƯỢT ĐƯỜNG CONG
-                            line=dict(color=color, width=2, shape='spline'), 
-                            marker=dict(size=4),
-                            customdata=formatted_times,
-                            hovertemplate=f"<b>{drv}</b><br>Lap: %{{x}}<br>Time: %{{customdata}}<extra></extra>"
-                        ))
+                        fig_map.update_layout(title="Track Dominance Map", xaxis=dict(visible=False), yaxis=dict(visible=False, scaleanchor="x", scaleratio=1), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', margin=dict(l=0, r=0, t=40, b=60), legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5))
+                        st.plotly_chart(fig_map, width='stretch')
+                        
+                    with col_speed:
+                        fig_speed = go.Figure()
+                        fig_speed.add_trace(go.Scatter(x=tel1['Distance'], y=tel1['Speed'], mode='lines', name=f"{drv1} ({sel_lap1})", line=dict(color=c1, width=2)))
+                        fig_speed.add_trace(go.Scatter(x=tel2['Distance'], y=tel2['Speed'], mode='lines', name=f"{drv2} ({sel_lap2})", line=dict(color=c2, width=2)))
+                        fig_speed.update_layout(title="Speed Trace", xaxis_title="Distance (m)", yaxis_title="Speed (km/h)", hovermode="x unified", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', margin=dict(l=0, r=0, t=40, b=60), xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)"), yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)"), legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5))
+                        st.plotly_chart(fig_speed, width='stretch')
 
-                fig_laps.update_layout(
-                    xaxis_title="Vòng đua (Lap Number)",
-                    yaxis_title="Thời gian vòng (Seconds)",
-                    hovermode="x unified",
-                    height=600,
-                    yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
-                    xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)", gridwidth=1),
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                )
-                
-                st.plotly_chart(fig_laps, use_container_width=True)
-            else:
-                st.warning("Vui lòng chọn ít nhất một tay đua.")
-            
-        with tab_dom:
-            st.info("Tab Track Dominance (Bản đồ mini-sector) - Đang xây dựng")
-            
-        with tab_tel:
-            st.info("Tab Telemetry (Phân tích chân ga, phanh, số) - Đang xây dựng")
-            
-    else:
-        st.warning("Không thể tải dữ liệu cho phiên này.")
+                    # ==========================================
+                    # BOTTOM HALF: ADDITIONAL TELEMETRY (4 INDEPENDENT CARDS)
+                    # ==========================================
+                    st.divider()
+                    st.subheader("Additional Telemetry Comparison")
+                    st.caption("Note: Battery Level and Steering Angle are not broadcasted publicly by the FIA. The grid displays Throttle, Brake, RPM, and DRS in independent cards.")
+                    
+                    # Rút gọn tên gốc để khi thêm chữ "Comparison" vào không bị quá dài
+                    metrics = [
+                        ('Throttle (%)', 'Throttle'), 
+                        ('Brake', 'Brake'),
+                        ('RPM', 'RPM'), 
+                        ('DRS', 'DRS')
+                    ]
+                    
+                    for i in range(0, 4, 2):
+                        cols = st.columns(2)
+                        for j in range(2):
+                            metric_title, metric_col = metrics[i+j]
+                            
+                            with cols[j]:
+                                with st.container(border=True):
+                                    fig_ind = go.Figure()
+                                    fig_ind.add_trace(go.Scatter(x=tel1['Distance'], y=tel1[metric_col], mode='lines', line=dict(color=c1, width=2), name=f"{drv1}"))
+                                    fig_ind.add_trace(go.Scatter(x=tel2['Distance'], y=tel2[metric_col], mode='lines', line=dict(color=c2, width=2), name=f"{drv2}"))
 
+                                    fig_ind.update_layout(
+                                        # Tăng size=16, đẩy y=0.95 (lên cao hơn), thêm chữ "Comparison"
+                                        title=dict(text=f"<b>{metric_title} Comparison</b>", font=dict(size=16), x=0.02, y=0.95),
+                                        
+                                        # Legend giữ nguyên ở dưới đáy và căn giữa
+                                        legend=dict(
+                                            orientation="h", 
+                                            yanchor="top", 
+                                            y=-0.25, 
+                                            xanchor="center", 
+                                            x=0.5, 
+                                            font=dict(size=11),
+                                            bgcolor="rgba(0,0,0,0)"
+                                        ),
+                                        
+                                        height=320,
+                                        hovermode="x unified",
+                                        plot_bgcolor='rgba(0,0,0,0)',
+                                        paper_bgcolor='rgba(0,0,0,0)',
+                                        
+                                        # Căn chỉnh lề: t=45 đủ rộng cho title to, b=60 đủ rộng cho legend
+                                        margin=dict(l=0, r=0, t=45, b=60),
+                                        
+                                        xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)", title_text="Distance (m)"),
+                                        yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
+                                    )
+                                    
+                                    st.plotly_chart(fig_ind, width='stretch', config={'displaylogo': False})
+                    
+            except Exception as e:
+                st.error(f"Error processing telemetry data: {e}")
+        with tab_tel: st.info("Telemetry Tab - Under Construction")
+    else: st.warning("Unable to load data for this session.")
 
-# ==========================================
-# LUỒNG ĐIỀU KHIỂN CHÍNH (ROUTER)
-# ==========================================
-if st.session_state['current_page'] == 'home':
-    render_home_page()
-elif st.session_state['current_page'] == 'details':
-    render_details_page()
+# --- ROUTER ---
+if st.session_state['current_page'] == 'home': render_home_page()
+elif st.session_state['current_page'] == 'details': render_details_page()
