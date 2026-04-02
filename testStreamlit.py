@@ -7,6 +7,8 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.express as px
+import time
+import streamlit.components.v1 as components 
 
 # --- PAGE CONFIG & CACHE ---
 st.set_page_config(page_title="F1 Pulse Interactive Dashboard", layout="wide", page_icon="🏎️")
@@ -37,7 +39,7 @@ if 'selected_event' not in st.session_state:
 if 'selected_year' not in st.session_state:
     st.session_state['selected_year'] = 2026
 
-# --- COUNTRY CODES (For FlagCDN API) ---
+# --- COUNTRY CODES ---
 COUNTRY_CODES = {
     "Bahrain": "bh", "Saudi Arabia": "sa", "Australia": "au", "Japan": "jp", 
     "China": "cn", "USA": "us", "United States": "us", "Miami": "us", 
@@ -113,47 +115,115 @@ def get_event_highlights(year, round_num):
         pass 
     return highlights
 
+
 # ==========================================
-# CÁC KHỐI FRAGMENT (CHỈ RERUN KHI CÓ TƯƠNG TÁC BÊN TRONG)
+# CÁC HÀM XỬ LÝ NỘI SUY DỮ LIỆU
+# ==========================================
+
+def process_lap_data_heavy(session, lap_number):
+    """ Hàm tính toán nặng: Trích xuất DataMap và Live Timing """
+    try:
+        laps_data = session.laps[session.laps['LapNumber'] == lap_number]
+        if laps_data.empty: return None
+        
+        min_time = laps_data['LapStartTime'].min()
+        max_time = laps_data['Time'].max()
+        
+        # 1. Xử lý Bảng Timing
+        timing_data = []
+        leader_time = None
+        sorted_laps = laps_data.dropna(subset=['Position']).sort_values('Position')
+        if not sorted_laps.empty: leader_time = sorted_laps.iloc[0]['Time']
+            
+        for _, row in sorted_laps.iterrows():
+            drv = row['Driver']
+            pos = int(row['Position'])
+            lap_time = row['LapTime']
+            
+            gap = "Leader"
+            if pos > 1 and pd.notna(row['Time']) and pd.notna(leader_time):
+                gap = f"+{(row['Time'] - leader_time).total_seconds():.3f}s"
+            elif pd.isna(row['Time']): gap = "OUT"
+            
+            lap_time_str = "N/A"
+            if pd.notna(lap_time):
+                lt_sec = lap_time.total_seconds()
+                lap_time_str = f"{int(lt_sec // 60)}:{lt_sec % 60:06.3f}"
+                
+            timing_data.append({
+                "Pos": pos, "Color": f"🟩" if pos == 1 else "⬛",
+                "Driver": drv, "Gap": gap, "Lap Time": lap_time_str, "Tyre": row.get('Compound', 'Unknown')
+            })
+
+        # 2. Xử lý dữ liệu Bản đồ Animation
+        drivers_in_lap = laps_data['Driver'].unique()
+        timestamps = pd.timedelta_range(start=min_time, end=max_time, freq='500ms')
+        df_list = []
+        color_map = {}
+        
+        for drv in drivers_in_lap:
+            try:
+                drv_lap = laps_data.pick_drivers(drv).iloc[0]
+                tel = drv_lap.get_telemetry()
+                time_col = 'SessionTime' if 'SessionTime' in tel.columns else 'Date'
+                
+                if not tel.empty and 'X' in tel.columns and time_col in tel.columns:
+                    tel_synced = tel[[time_col, 'X', 'Y']].copy()
+                    tel_synced.set_index(time_col, inplace=True)
+                    tel_synced = tel_synced[~tel_synced.index.duplicated(keep='first')]
+                    tel_synced = tel_synced.reindex(timestamps, method='nearest').reset_index()
+                    tel_synced.rename(columns={'index': 'SessionTime'}, inplace=True)
+                    
+                    tel_synced['Driver'] = drv
+                    tel_synced['TimeStr'] = "T+ " + tel_synced['SessionTime'].dt.total_seconds().round(1).astype(str) + "s"
+                    
+                    info = session.get_driver(drv)
+                    hex_color = f"#{info['TeamColor']}" if str(info['TeamColor']) != 'nan' else '#FFFFFF'
+                    tel_synced['Color'] = hex_color
+                    color_map[drv] = hex_color
+                    df_list.append(tel_synced)
+            except: pass
+            
+        map_df = pd.concat(df_list, ignore_index=True) if df_list else pd.DataFrame()
+        
+        return {
+            "map_df": map_df,
+            "color_map": color_map,
+            "timing_data": timing_data,
+            "max_time": max_time,
+            "frame_count": len(timestamps)
+        }
+    except Exception as e:
+        print(f"Error in heavy processing: {e}")
+        return None
+
+# ==========================================
+# CÁC KHỐI FRAGMENT
 # ==========================================
 
 @st.fragment
 def fragment_positions(session, drivers, session_name):
-    """Fragment quản lý biểu đồ Position và bộ lọc tay đua"""
     sub_chart, sub_rc, sub_analysis = st.tabs(["📈 Position Chart", "🚨 Race Control", "📊 Analysis"])
-    
     with sub_chart:
         col_title, col_filter = st.columns([3, 1])
         with col_title:
             st.subheader(f"Lap-by-Lap Position Changes - {session_name}")
             st.caption("Note: Within a team, the second driver is shown with a dashed line.")
-            
         with col_filter:
             with st.expander("Filter Drivers", expanded=False):
-                # Khởi tạo state
                 for drv in drivers:
-                    if f"ch_{drv}" not in st.session_state:
-                        st.session_state[f"ch_{drv}"] = True
-                        
+                    if f"ch_{drv}" not in st.session_state: st.session_state[f"ch_{drv}"] = True
                 def toggle_all():
                     master_val = st.session_state["sel_all_pos"]
-                    for d in drivers:
-                        st.session_state[f"ch_{d}"] = master_val
-                        
+                    for d in drivers: st.session_state[f"ch_{d}"] = master_val
                 st.checkbox("Select All", value=True, key="sel_all_pos", on_change=toggle_all)
-                
-                selected_drivers = []
-                for drv in drivers:
-                    if st.checkbox(drv, key=f"ch_{drv}"):
-                        selected_drivers.append(drv)
+                selected_drivers = [drv for drv in drivers if st.checkbox(drv, key=f"ch_{drv}")]
 
-        if not selected_drivers:
-            st.warning("👈 Please select at least one driver.")
+        if not selected_drivers: st.warning("👈 Please select at least one driver.")
         else:
             fig_pos = go.Figure()
             all_laps = session.laps
             team_count = {}
-
             for drv in selected_drivers:
                 drv_laps = all_laps.pick_drivers(drv).dropna(subset=['Position'])
                 if not drv_laps.empty:
@@ -161,29 +231,12 @@ def fragment_positions(session, drivers, session_name):
                     team_name = driver_info['TeamName']
                     color = f"#{driver_info['TeamColor']}"
                     if color == "#nan" or not color: color = "white"
-                    
-                    if team_name not in team_count:
-                        line_style = 'solid'
-                        team_count[team_name] = 1
-                    else:
-                        line_style = 'dash'
-                    
-                    fig_pos.add_trace(go.Scatter(
-                        x=drv_laps['LapNumber'],
-                        y=drv_laps['Position'],
-                        mode='lines',
-                        name=drv,
-                        line=dict(color=color, width=2.5, dash=line_style),
-                        hovertemplate=f"<b>{drv}</b> ({team_name})<br>Lap: %{{x}}<br>Pos: P%{{y}}<extra></extra>"
-                    ))
+                    line_style = 'solid' if team_name not in team_count else 'dash'
+                    team_count[team_name] = 1
+                    fig_pos.add_trace(go.Scatter(x=drv_laps['LapNumber'], y=drv_laps['Position'], mode='lines', name=drv, line=dict(color=color, width=2.5, dash=line_style), hovertemplate=f"<b>{drv}</b> ({team_name})<br>Lap: %{{x}}<br>Pos: P%{{y}}<extra></extra>"))
 
             max_lap = int(all_laps['LapNumber'].max()) if not all_laps.empty else 50
-            fig_pos.update_layout(
-                yaxis=dict(autorange="reversed", tickmode='linear', dtick=1),
-                xaxis=dict(title="Lap", range=[1, max_lap], tickmode='linear', tick0=1, dtick=5, showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
-                hovermode="x unified", height=550, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                margin=dict(l=0, r=0, t=40, b=80), legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5)
-            )
+            fig_pos.update_layout(yaxis=dict(autorange="reversed", tickmode='linear', dtick=1), xaxis=dict(title="Lap", range=[1, max_lap], tickmode='linear', tick0=1, dtick=5, showgrid=True, gridcolor="rgba(255,255,255,0.1)"), hovermode="x unified", height=550, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=40, b=80), legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5))
             st.plotly_chart(fig_pos, width='stretch')
 
     with sub_rc:
@@ -193,8 +246,6 @@ def fragment_positions(session, drivers, session_name):
             rcm_display = rcm_df[['Time', 'Category', 'Flag', 'Message']].copy()
             rcm_display['Time'] = rcm_display['Time'].apply(lambda ts: ts.strftime("%H:%M:%S") if pd.notna(ts) else "")
             st.dataframe(rcm_display, width='stretch', hide_index=True)
-        else:
-            st.info("No Race Control messages found for this session.")
 
     with sub_analysis:
         st.subheader("Places Gained/Lost Summary")
@@ -204,31 +255,26 @@ def fragment_positions(session, drivers, session_name):
             change = f"↑ +{int(grid-pos)}" if grid > pos else (f"↓ {int(grid-pos)}" if grid < pos else "- 0")
             if grid == 0: change = "Pit Start"
             analysis_data.append({'Final Pos': str(int(pos)) if pd.notna(pos) else "N/A", 'Driver': row['FullName'], 'Team': row['TeamName'], 'Grid': str(int(grid)) if grid > 0 else "Pit", 'Change': change, 'Status': row['Status']})
-        
-        def style_change(val):
-            return 'color: #00cc66; font-weight: bold;' if '↑' in str(val) else ('color: #ff4b4b; font-weight: bold;' if '↓' in str(val) else 'color: gray;')
+        def style_change(val): return 'color: #00cc66; font-weight: bold;' if '↑' in str(val) else ('color: #ff4b4b; font-weight: bold;' if '↓' in str(val) else 'color: gray;')
         st.dataframe(pd.DataFrame(analysis_data).style.map(style_change, subset=['Change']), width='stretch', hide_index=True)
-
 
 @st.fragment
 def fragment_lap_times(session, drivers):
-    """Fragment quản lý logic thêm/xóa tay đua để so sánh Lap Time"""
     if 'lt_boxes' not in st.session_state: st.session_state['lt_boxes'] = ['box_0', 'box_1'] 
     if 'lt_box_counter' not in st.session_state: st.session_state['lt_box_counter'] = 2
-    
     boxes = st.session_state['lt_boxes']
     n = len(boxes)
-
     c_title, c_add = st.columns([4, 1])
     with c_title: st.subheader("Lap Time Comparison")
+    
+    def add_driver():
+        st.session_state['lt_boxes'].append(f"box_{st.session_state['lt_box_counter']}")
+        st.session_state['lt_box_counter'] += 1
+        
     with c_add:
-        if st.button("➕ Add Driver", disabled=n >= 6, width='stretch'):
-            st.session_state['lt_boxes'].append(f"box_{st.session_state['lt_box_counter']}")
-            st.session_state['lt_box_counter'] += 1
-            st.rerun() # Chỉ rerun fragment này!
+        st.button("➕ Add Driver", disabled=n >= 6, width='stretch', on_click=add_driver)
 
     sel_drivers = []
-    
     for i in range(0, n, 3):
         cols = st.columns(3)
         for j in range(3):
@@ -240,11 +286,10 @@ def fragment_lap_times(session, drivers):
                         sc1, sc2 = st.columns([4, 1])
                         with sc1: drv = st.selectbox("Driver", drivers, index=idx%len(drivers), key=f"sel_{b_id}", label_visibility="collapsed")
                         with sc2: 
-                            if st.button("✖", key=f"del_{b_id}"): 
-                                st.session_state['lt_boxes'].remove(b_id)
-                                st.rerun() # Chỉ rerun fragment này!
-                    else: 
-                        drv = st.selectbox("Driver", drivers, index=idx%len(drivers), key=f"sel_{b_id}", label_visibility="collapsed")
+                            def remove_driver(box_id=b_id):
+                                st.session_state['lt_boxes'].remove(box_id)
+                            st.button("✖", key=f"del_{b_id}", on_click=remove_driver)
+                    else: drv = st.selectbox("Driver", drivers, index=idx%len(drivers), key=f"sel_{b_id}", label_visibility="collapsed")
                     sel_drivers.append(drv)
 
     unique_drv = list(dict.fromkeys(sel_drivers))
@@ -258,14 +303,11 @@ def fragment_lap_times(session, drivers):
         fig_l.update_layout(xaxis_title="Lap", yaxis_title="Time (s)", hovermode="x unified", height=600)
         st.plotly_chart(fig_l, width='stretch')
 
-
 @st.fragment
 def fragment_dominance(session, drivers):
-    """Fragment tính toán và so sánh sức mạnh Track Dominance"""
     col_title, col_ctrls = st.columns([1.2, 2.8])
     with col_title:
         st.subheader("Track Dominance & Speed Trace")
-        st.caption("Compare corner-by-corner dominance and speed.")
     with col_ctrls:
         c1, c2, c3, c4, c5 = st.columns([2, 2, 0.5, 2, 2])
         with c1: drv1 = st.selectbox("Driver 1", drivers, index=0, key="dom_d1")
@@ -279,7 +321,6 @@ def fragment_dominance(session, drivers):
             sel_lap2 = st.selectbox("Lap", ["Fastest"] + [f"Lap {l}" for l in laps2], index=0, key="dom_l2")
 
     st.divider()
-
     try:
         def get_lap_data(drv, sel):
             drv_laps = session.laps.pick_drivers(drv)
@@ -289,12 +330,10 @@ def fragment_dominance(session, drivers):
         lap1 = get_lap_data(drv1, sel_lap1)
         lap2 = get_lap_data(drv2, sel_lap2)
         
-        if pd.isna(lap1['LapTime']) or pd.isna(lap2['LapTime']):
-            st.warning("Selected laps do not have valid telemetry data. Please select different laps.")
+        if pd.isna(lap1['LapTime']) or pd.isna(lap2['LapTime']): st.warning("Selected laps do not have valid telemetry data.")
         else:
             tel1 = lap1.get_telemetry()
             tel2 = lap2.get_telemetry()
-            
             c1 = f"#{session.get_driver(drv1)['TeamColor']}" if str(session.get_driver(drv1)['TeamColor']) != 'nan' else 'white'
             c2 = f"#{session.get_driver(drv2)['TeamColor']}" if str(session.get_driver(drv2)['TeamColor']) != 'nan' else 'white'
             if c1 == c2: c2 = "#00FFFF" 
@@ -302,39 +341,29 @@ def fragment_dominance(session, drivers):
             num_sectors = 50
             max_dist = max(tel1['Distance'].max(), tel2['Distance'].max())
             sector_length = max_dist / num_sectors
-            
             tel1['MiniSector'] = (tel1['Distance'] // sector_length).astype(int)
             tel2['MiniSector'] = (tel2['Distance'] // sector_length).astype(int)
-            
             sectors = pd.DataFrame({'S1': tel1.groupby('MiniSector')['Speed'].mean(), 'S2': tel2.groupby('MiniSector')['Speed'].mean()}).fillna(0)
-            
             conditions = [abs(sectors['S1'] - sectors['S2']) <= 2.0, sectors['S1'] > sectors['S2']]
             sectors['Dominant'] = np.select(conditions, [0, 1], default=2)
             tel1['Dominant'] = tel1['MiniSector'].map(sectors['Dominant'])
             
             col_map, col_speed = st.columns(2)
-            
             with col_map:
                 fig_map = go.Figure()
                 tel1['Block'] = (tel1['Dominant'] != tel1['Dominant'].shift(1)).cumsum()
                 block_ids = tel1['Block'].unique()
                 show_leg1, show_leg2, show_leg0 = True, True, True
-                
                 for i, b in enumerate(block_ids):
                     group = tel1[tel1['Block'] == b].copy()
-                    if i < len(block_ids) - 1:
-                        group = pd.concat([group, tel1[tel1['Block'] == block_ids[i+1]].iloc[0:1]])
-                        
+                    if i < len(block_ids) - 1: group = pd.concat([group, tel1[tel1['Block'] == block_ids[i+1]].iloc[0:1]])
                     dom_val = group['Dominant'].iloc[0]
                     color, drv_name = ("#FFFF00", "Neutral") if dom_val == 0 else (c1, f"{drv1} Faster") if dom_val == 1 else (c2, f"{drv2} Faster")
-                    
                     show_leg = False
                     if dom_val == 1 and show_leg1: show_leg = True; show_leg1 = False
                     elif dom_val == 2 and show_leg2: show_leg = True; show_leg2 = False
                     elif dom_val == 0 and show_leg0: show_leg = True; show_leg0 = False
-                        
                     fig_map.add_trace(go.Scatter(x=group['X'], y=group['Y'], mode='lines', line=dict(color=color, width=8), name=drv_name, showlegend=show_leg, hoverinfo='skip'))
-                
                 fig_map.update_layout(title="Track Dominance Map", xaxis=dict(visible=False), yaxis=dict(visible=False, scaleanchor="x", scaleratio=1), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', margin=dict(l=0, r=0, t=40, b=60), legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5))
                 st.plotly_chart(fig_map, width='stretch')
                 
@@ -346,16 +375,7 @@ def fragment_dominance(session, drivers):
                 st.plotly_chart(fig_speed, width='stretch')
 
             st.divider()
-            st.subheader("Additional Telemetry Comparison")
-            st.caption("Note: Battery Level and Steering Angle are not broadcasted publicly by the FIA. The grid displays Throttle, Brake, RPM, and DRS in independent cards.")
-            
-            metrics = [
-                ('Throttle (%)', 'Throttle'), 
-                ('Brake', 'Brake'),
-                ('RPM', 'RPM'), 
-                ('DRS', 'DRS')
-            ]
-            
+            metrics = [('Throttle (%)', 'Throttle'), ('Brake', 'Brake'), ('RPM', 'RPM'), ('DRS', 'DRS')]
             for i in range(0, 4, 2):
                 cols = st.columns(2)
                 for j in range(2):
@@ -365,180 +385,243 @@ def fragment_dominance(session, drivers):
                             fig_ind = go.Figure()
                             fig_ind.add_trace(go.Scatter(x=tel1['Distance'], y=tel1[metric_col], mode='lines', line=dict(color=c1, width=2), name=f"{drv1}"))
                             fig_ind.add_trace(go.Scatter(x=tel2['Distance'], y=tel2[metric_col], mode='lines', line=dict(color=c2, width=2), name=f"{drv2}"))
-
-                            fig_ind.update_layout(
-                                title=dict(text=f"<b>{metric_title} Comparison</b>", font=dict(size=16), x=0.02, y=0.95),
-                                legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="center", x=0.5, font=dict(size=11), bgcolor="rgba(0,0,0,0)"),
-                                height=320, hovermode="x unified", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                                margin=dict(l=0, r=0, t=45, b=60),
-                                xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)", title_text="Distance (m)"),
-                                yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
-                            )
+                            fig_ind.update_layout(title=dict(text=f"<b>{metric_title} Comparison</b>", font=dict(size=16), x=0.02, y=0.95), legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="center", x=0.5, font=dict(size=11), bgcolor="rgba(0,0,0,0)"), height=320, hovermode="x unified", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', margin=dict(l=0, r=0, t=45, b=60), xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)", title_text="Distance (m)"), yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)"))
                             st.plotly_chart(fig_ind, width='stretch', config={'displaylogo': False})
-    except Exception as e:
-        st.error(f"Error processing telemetry data: {e}")
-
+    except Exception as e: st.error(f"Error processing telemetry data: {e}")
 
 @st.fragment
 def fragment_telemetry_card(session, drivers, chart_info, idx):
-    """Fragment vẽ một thẻ Telemetry độc lập. Đổi lap ở đây KHÔNG ảnh hưởng thẻ khác"""
-    gear_colors = {
-        1: '#00FFFF', 2: '#FF7F50', 3: '#008080', 4: '#FF0000', 
-        5: '#FF1493', 6: '#0000CD', 7: '#ADFF2F', 8: '#FFD700'
-    }
-
+    gear_colors = {1: '#00FFFF', 2: '#FF7F50', 3: '#008080', 4: '#FF0000', 5: '#FF1493', 6: '#0000CD', 7: '#ADFF2F', 8: '#FFD700'}
     with st.container(border=True):
         c_title, c_drv, c_lap = st.columns([2, 1, 1])
-        
-        with c_drv:
-            drv_sel = st.selectbox("Drv", drivers, key=f"tel_drv_{idx}", label_visibility="collapsed")
+        with c_drv: drv_sel = st.selectbox("Drv", drivers, key=f"tel_drv_{idx}", label_visibility="collapsed")
         with c_lap:
             laps_list = session.laps.pick_drivers(drv_sel)['LapNumber'].dropna().astype(int).tolist()
-            lap_opts = ["Fastest"] + [f"Lap {l}" for l in laps_list]
-            lap_sel = st.selectbox("Lap", lap_opts, key=f"tel_lap_{idx}", label_visibility="collapsed")
+            lap_sel = st.selectbox("Lap", ["Fastest"] + [f"Lap {l}" for l in laps_list], key=f"tel_lap_{idx}", label_visibility="collapsed")
 
         lap_str_title = "Fastest Lap" if lap_sel == "Fastest" else lap_sel
         with c_title:
-            st.markdown(f"""
-            <div style='font-weight:bold; font-size:1.1rem; padding-top:2px; line-height:1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>
-                {drv_sel}'s {lap_str_title}
-                <br><span style='color:#00cc66; font-size:0.9rem; letter-spacing: 0.5px;'>{chart_info['title'].upper()}</span>
-            </div>
-            """, unsafe_allow_html=True)
-
+            st.markdown(f"<div style='font-weight:bold; font-size:1.1rem; padding-top:2px; line-height:1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{drv_sel}'s {lap_str_title}<br><span style='color:#00cc66; font-size:0.9rem; letter-spacing: 0.5px;'>{chart_info['title'].upper()}</span></div>", unsafe_allow_html=True)
         try:
             drv_laps = session.laps.pick_drivers(drv_sel)
             lap_data = drv_laps.pick_fastest() if lap_sel == "Fastest" else drv_laps[drv_laps['LapNumber'] == int(lap_sel.replace("Lap ", ""))].iloc[0]
-            
-            if pd.isna(lap_data['LapTime']):
-                st.warning("No telemetry.")
+            if pd.isna(lap_data['LapTime']): st.warning("No telemetry.")
             else:
                 tel = lap_data.get_telemetry().copy()
                 drv_color = f"#{session.get_driver(drv_sel)['TeamColor']}" if str(session.get_driver(drv_sel)['TeamColor']) != 'nan' else 'white'
-                
                 fig = go.Figure()
-
                 if chart_info['type'] == 'map':
                     tel['nGear'] = pd.to_numeric(tel['nGear'], errors='coerce').fillna(0).astype(int)
-                    for gear in range(1, 9):
-                        color = gear_colors.get(gear, '#FFFFFF')
-                        fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color=color), name=f"Gear {gear}", showlegend=True))
-
+                    for gear in range(1, 9): fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color=gear_colors.get(gear, '#FFFFFF')), name=f"Gear {gear}", showlegend=True))
                     tel['Block'] = (tel['nGear'] != tel['nGear'].shift(1)).cumsum()
                     block_ids = tel['Block'].unique()
-                    
                     for k, b in enumerate(block_ids):
                         group = tel[tel['Block'] == b].copy()
-                        if k < len(block_ids) - 1:
-                            next_block = tel[tel['Block'] == block_ids[k+1]].iloc[0:1]
-                            group = pd.concat([group, next_block], ignore_index=True)
-                            
+                        if k < len(block_ids) - 1: group = pd.concat([group, tel[tel['Block'] == block_ids[k+1]].iloc[0:1]], ignore_index=True)
                         gear = int(group['nGear'].iloc[0])
-                        color = gear_colors.get(gear, '#FFFFFF')
-                        fig.add_trace(go.Scatter(x=group['X'], y=group['Y'], mode='lines', line=dict(color=color, width=5), name=f"Gear {gear}", showlegend=False, hoverinfo='skip'))
-                        
+                        fig.add_trace(go.Scatter(x=group['X'], y=group['Y'], mode='lines', line=dict(color=gear_colors.get(gear, '#FFFFFF'), width=5), name=f"Gear {gear}", showlegend=False, hoverinfo='skip'))
                     fig.update_layout(xaxis=dict(visible=False), yaxis=dict(visible=False, scaleanchor="x", scaleratio=1), legend=dict(orientation="h", yanchor="top", y=-0.05, xanchor="center", x=0.5, font=dict(size=11)))
-
                 else:
                     fig.add_trace(go.Scatter(x=tel['Distance'], y=tel[chart_info['metric']], mode='lines', line=dict(color=drv_color, width=2.5), hovertemplate="Dist: %{x}m<br>Value: %{y}<extra></extra>"))
-                    fig.update_layout(
-                        xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)", title_text="Distance (m)"),
-                        yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)", title_text=chart_info['unit']),
-                        hovermode="x unified", showlegend=False 
-                    )
-
+                    fig.update_layout(xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)", title_text="Distance (m)"), yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)", title_text=chart_info['unit']), hovermode="x unified", showlegend=False)
                 fig.update_layout(height=400, margin=dict(l=0, r=0, t=20, b=15), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
                 st.plotly_chart(fig, width='stretch', config={'displayModeBar': False})
-
-        except Exception as e:
-            st.error(f"Lỗi vẽ biểu đồ: {str(e)}")
+        except Exception as e: st.error(f"Lỗi vẽ biểu đồ: {str(e)}")
 
 
+# ==========================================
+# FRAGMENT REPLAY TRẢI NGHIỆM MƯỢT MÀ (PRE-LOADED)
+# ==========================================
 @st.fragment
-def fragment_replay(session):
-    """Fragment cô lập việc render Animation bản đồ"""
-    st.subheader("🏎️ Live Track Map Replay")
-    st.caption("Watch the cars move around the track. Select Lap 1 for the best traffic and overtake actions!")
+def fragment_replay_preloaded(session):
+    st.subheader("🏎️ Full Session Live Replay (Pre-loaded)")
+    st.caption("Toàn bộ dữ liệu được tải trước một lần để đảm bảo hoạt ảnh chạy liên tục, mượt mà nhất.")
     
-    col_ctrl, col_info = st.columns([1, 2])
-    with col_ctrl:
-        max_lap_avail = int(session.laps['LapNumber'].max())
-        selected_lap = st.number_input("Select Lap to Replay", min_value=1, max_value=max_lap_avail, value=1, step=1)
+    # 1. Khởi tạo State & Kiểm tra thay đổi phiên đua
+    session_id = f"{st.session_state.get('selected_year', '')}_{st.session_state.get('selected_event', {}).get('round', '')}"
     
+    if 'replay_session_id' not in st.session_state or st.session_state['replay_session_id'] != session_id:
+        st.session_state['replay_session_id'] = session_id
+        st.session_state['replay_data_store'] = {} # Nơi chứa toàn bộ dữ liệu Replay
+        st.session_state['is_auto_playing'] = False
+        st.session_state['replay_lap_slider'] = 1
+
+    max_lap_avail = int(session.laps['LapNumber'].max()) if not session.laps.empty else 1
+    
+    # 2. XỬ LÝ TIẾN TRÌNH PRE-LOAD DỮ LIỆU
+    is_fully_loaded = len(st.session_state['replay_data_store']) == max_lap_avail
+    
+    if not is_fully_loaded:
+        st.warning("⏳ Đang tải và đồng bộ tọa độ Telemetry cho toàn bộ cuộc đua. Xin vui lòng chờ khoảng 1-2 phút...")
+        progress_bar = st.progress(0.0)
+        status_text = st.empty()
+        
+        for lap in range(1, max_lap_avail + 1):
+            if lap not in st.session_state['replay_data_store']:
+                status_text.text(f"Đang xử lý nội suy vòng {lap}/{max_lap_avail}...")
+                lap_data = process_lap_data_heavy(session, lap)
+                st.session_state['replay_data_store'][lap] = lap_data
+            progress_bar.progress(lap / max_lap_avail)
+            
+        status_text.success("✅ Toàn bộ dữ liệu đã được nạp vào RAM! Replay đã sẵn sàng.")
+        time.sleep(1.5)
+        status_text.empty()
+        progress_bar.empty()
+
+    # 3. ĐIỀU KHIỂN UI (SLIDER & AUTO-PLAY)
+    col_play, col_slider = st.columns([1, 6], gap="medium")
+    
+    with col_play:
+        st.markdown("<br>", unsafe_allow_html=True)
+        def toggle_play():
+            st.session_state['is_auto_playing'] = not st.session_state['is_auto_playing']
+            
+        st.button(
+            "⏸️ Pause" if st.session_state['is_auto_playing'] else "▶️ Auto-Play", 
+            width='stretch', type='primary', on_click=toggle_play
+        )
+            
+    with col_slider:
+        def on_slider_change():
+            st.session_state['is_auto_playing'] = False
+
+        current_lap = st.slider(
+            "Session Timeline (Lap)", min_value=1, max_value=max_lap_avail, 
+            key='replay_lap_slider', on_change=on_slider_change
+        )
+
     st.divider()
 
-    with st.spinner(f"Synchronizing 20-car telemetry for Lap {selected_lap}... This involves heavy data crunching, please wait!"):
-        try:
-            ref_lap = session.laps.pick_fastest()
-            ref_tel = ref_lap.get_telemetry()
-            
-            laps_data = session.laps[session.laps['LapNumber'] == selected_lap]
-            drivers_in_lap = laps_data['Driver'].unique()
-            
-            min_time = laps_data['LapStartTime'].min()
-            max_time = laps_data['Time'].max()
-            
-            timestamps = pd.timedelta_range(start=min_time, end=max_time, freq='500ms')
-            
-            df_list = []
-            color_map = {} 
-            
-            for drv in drivers_in_lap:
-                try:
-                    drv_lap = laps_data.pick_drivers(drv).iloc[0]
-                    tel = drv_lap.get_telemetry()
-                    time_col = 'SessionTime' if 'SessionTime' in tel.columns else 'Date'
-                    
-                    if not tel.empty and 'X' in tel.columns and time_col in tel.columns:
-                        tel_synced = tel[[time_col, 'X', 'Y']].copy()
-                        tel_synced.set_index(time_col, inplace=True)
-                        tel_synced = tel_synced[~tel_synced.index.duplicated(keep='first')]
-                        
-                        tel_synced = tel_synced.reindex(timestamps, method='nearest').reset_index()
-                        tel_synced.rename(columns={'index': 'SessionTime'}, inplace=True)
-                        
-                        tel_synced['Driver'] = drv
-                        tel_synced['TimeStr'] = "T+ " + tel_synced['SessionTime'].dt.total_seconds().round(1).astype(str) + "s"
-                        
-                        info = session.get_driver(drv)
-                        hex_color = f"#{info['TeamColor']}" if str(info['TeamColor']) != 'nan' else '#FFFFFF'
-                        tel_synced['Color'] = hex_color
-                        color_map[drv] = hex_color
-                        
-                        df_list.append(tel_synced)
-                except Exception:
-                    pass
-                    
-            if not df_list:
-                st.warning("No telemetry data available for this lap.")
-            else:
-                df_all = pd.concat(df_list, ignore_index=True)
+    # 4. TRUY XUẤT VÀ HIỂN THỊ DỮ LIỆU ĐÃ CACHE
+    lap_data = st.session_state['replay_data_store'].get(current_lap)
+    
+    if lap_data:
+        col_map, col_timing = st.columns([1.5, 1], gap="large")
+        
+        # --- BẢNG TIMING ---
+        with col_timing:
+            st.markdown(f"#### ⏱️ Live Timing - Lap {current_lap}")
+            if lap_data['timing_data']:
+                st.dataframe(
+                    pd.DataFrame(lap_data['timing_data']), 
+                    width='stretch', hide_index=True, 
+                    column_config={
+                        "Pos": st.column_config.NumberColumn("P", width="small"), "Color": st.column_config.TextColumn("", width="small"),
+                        "Driver": st.column_config.TextColumn("Driver", width="medium"), "Gap": st.column_config.TextColumn("Gap to L", width="medium"),
+                        "Lap Time": st.column_config.TextColumn("Lap Time", width="medium"), "Tyre": st.column_config.TextColumn("Tyre", width="small")
+                    }
+                )
+            else: st.info("No timing data.")
+
+        # --- BẢN ĐỒ ANIMATION ---
+        with col_map:
+            st.markdown("#### 🗺️ Track Map Animation")
+            if not lap_data['map_df'].empty:
+                ref_tel = session.laps.pick_fastest().get_telemetry()
                 
                 fig_replay = px.scatter(
-                    df_all, x="X", y="Y", animation_frame="TimeStr", animation_group="Driver",
-                    color="Driver", color_discrete_map=color_map, hover_name="Driver"
+                    lap_data['map_df'], x="X", y="Y", animation_frame="TimeStr", animation_group="Driver",
+                    color="Driver", color_discrete_map=lap_data['color_map'], hover_name="Driver"
                 )
-                
-                fig_replay.update_traces(marker=dict(size=14, line=dict(width=2, color='DarkSlateGrey')))
-                
-                fig_replay.add_trace(go.Scatter(
-                    x=ref_tel['X'], y=ref_tel['Y'], mode='lines', line=dict(color='rgba(255, 255, 255, 0.2)', width=6), hoverinfo='skip', showlegend=False
-                ))
+                fig_replay.update_traces(marker=dict(size=16, line=dict(width=2, color='DarkSlateGrey')))
+                fig_replay.add_trace(go.Scatter(x=ref_tel['X'], y=ref_tel['Y'], mode='lines', line=dict(color='rgba(255, 255, 255, 0.15)', width=8), hoverinfo='skip', showlegend=False))
                 
                 fig_replay.update_layout(
                     xaxis=dict(visible=False, range=[ref_tel['X'].min()-1000, ref_tel['X'].max()+1000]), 
                     yaxis=dict(visible=False, scaleanchor="x", scaleratio=1, range=[ref_tel['Y'].min()-1000, ref_tel['Y'].max()+1000]),
-                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', height=750, margin=dict(l=0, r=0, t=30, b=0),
+                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', height=550, margin=dict(l=0, r=0, t=0, b=0),
                     legend=dict(orientation="h", yanchor="top", y=1.0, xanchor="center", x=0.5, font=dict(size=12))
                 )
+                fig_replay.layout.updatemenus[0].buttons[0].args[1]['frame']['duration'] = 100 
                 
-                fig_replay.layout.updatemenus[0].buttons[0].args[1]['frame']['duration'] = 150 
-                fig_replay.layout.updatemenus[0].buttons[0].args[1]['transition']['duration'] = 0 
+                # Render native cực nhanh
+                st.plotly_chart(fig_replay, width='stretch', config={'displayModeBar': False}, key=f"map_{current_lap}_{time.time()}")
                 
-                st.plotly_chart(fig_replay, width='stretch')
+                if st.session_state['is_auto_playing']:
+                    # Tính toán giờ Animation Video sẽ chạy xong
+                    anim_time = (lap_data['frame_count'] * 0.100) + 1.0
+                    
+                    # Script JS nhỏ tàng hình móc ra DOM cha để bấm nút Play & Next Lap
+                    js_director = f"""
+                    <script>
+                        function startDirector() {{
+                            var parentDoc = window.parent.document;
+                            
+                            // Tự động bấm nút Play của Plotly
+                            setTimeout(function() {{
+                                try {{
+                                    var playBtns = parentDoc.querySelectorAll('.updatemenu-button');
+                                    if (playBtns.length > 0) {{
+                                        playBtns[0].dispatchEvent(new MouseEvent('click', {{bubbles: true, cancelable: true, view: window.parent}}));
+                                    }}
+                                }} catch(e) {{}}
+                            }}, 800);
+                            
+                            // Đợi video hết -> Tự động bấm nút Next Lap
+                            setTimeout(function() {{
+                                try {{
+                                    var btns = parentDoc.querySelectorAll('button');
+                                    for (var i = 0; i < btns.length; i++) {{
+                                        if (btns[i].innerText && btns[i].innerText.includes('Next Lap (Auto-Loading)')) {{
+                                            btns[i].click();
+                                            break;
+                                        }}
+                                    }}
+                                }} catch(e) {{}}
+                            }}, {int(anim_time * 1000)});
+                        }}
+                        window.addEventListener('load', startDirector);
+                    </script>
+                    """
+                    components.html(js_director, height=0)
+                    st.info(f"Auto-playing... Next lap in {anim_time:.1f}s")
+            else: st.warning("No telemetry available to draw map.")
+
+        st.divider()
+        st.markdown("#### 🚨 Race Control Messages")
+        rcm_df = session.race_control_messages
+        max_time = lap_data['max_time']
+        
+        if not rcm_df.empty and pd.notna(max_time):
+            past_messages = rcm_df.copy()
+            if pd.api.types.is_datetime64_any_dtype(past_messages['Time']):
+                if hasattr(session, 't0_date') and session.t0_date is not None:
+                    max_wall_time = session.t0_date + max_time
+                    if past_messages['Time'].dt.tz is not None and max_wall_time.tzinfo is None: max_wall_time = max_wall_time.tz_localize(past_messages['Time'].dt.tz)
+                    elif past_messages['Time'].dt.tz is None and max_wall_time.tzinfo is not None: max_wall_time = max_wall_time.tz_convert(None) 
+                    past_messages = past_messages[past_messages['Time'] <= max_wall_time]
+            else:
+                past_messages = past_messages[past_messages['Time'] <= max_time]
+            
+            if not past_messages.empty:
+                past_messages = past_messages.sort_values(by='Time', ascending=False)
+                if pd.api.types.is_datetime64_any_dtype(past_messages['Time']): past_messages['TimeStr'] = past_messages['Time'].apply(lambda ts: ts.strftime("%H:%M:%S") if pd.notna(ts) else "")
+                else: past_messages['TimeStr'] = past_messages['Time'].apply(lambda ts: f"T+{int(ts.total_seconds()//60):02d}:{int(ts.total_seconds()%60):02d}" if pd.notna(ts) else "")
                 
-        except Exception as e:
-            st.error(f"Cannot generate replay for this lap. Error: {e}")
+                def style_flags(val):
+                    if 'Yellow' in str(val) or 'SC' in str(val) or 'VSC' in str(val): return 'background-color: rgba(255, 255, 0, 0.2); color: yellow;'
+                    if 'Red' in str(val): return 'background-color: rgba(255, 0, 0, 0.2); color: red;'
+                    if 'Green' in str(val) or 'Clear' in str(val): return 'background-color: rgba(0, 255, 0, 0.1); color: #00cc66;'
+                    return ''
+                    
+                df_display = past_messages[['TimeStr', 'Category', 'Flag', 'Message']].copy()
+                df_display.columns = ['Time', 'Category', 'Flag', 'Message']
+                st.dataframe(df_display.style.map(style_flags, subset=['Flag', 'Message']), width='stretch', height=250, hide_index=True)
+            else: st.info("No incidents reported yet.")
+        else: st.info("Race control board is empty.")
+
+        # --- NÚT BẤM CHO PHÉP JS TRÌNH DUYỆT TỰ ĐỘNG CHUYỂN VÒNG ĐUA ---
+        if st.session_state['is_auto_playing']:
+            def advance_lap():
+                if st.session_state['replay_lap_slider'] < max_lap_avail:
+                    st.session_state['replay_lap_slider'] += 1
+                else:
+                    st.session_state['is_auto_playing'] = False
+
+            # JS sẽ tự động tìm kiếm nút "Next Lap" này để click khi hết video
+            st.button("⏭️ Next Lap (Auto-Loading)", on_click=advance_lap, use_container_width=True)
+    else:
+        st.error("Dữ liệu vòng này bị lỗi hoặc không tồn tại.")
 
 # ==========================================
 # GIAO DIỆN CHÍNH
@@ -704,8 +787,7 @@ def render_details_page(app_window):
             })
             st.dataframe(display_df.replace('nan', 'N/A'), width='stretch', hide_index=True)
             
-        with tab_pos:
-            fragment_positions(session, drivers, selected_session_name)
+        with tab_pos: fragment_positions(session, drivers, selected_session_name)
             
         with tab_strat:
             sub_overview, sub_stint = st.tabs(["📊 Strategy Overview", "📋 Stint Detail Analysis"])
@@ -739,17 +821,12 @@ def render_details_page(app_window):
                     stint_stats.append({'Driver': driver, 'Stint': int(stint), 'Compound': compound, 'Length': f"{len(group)} (L{int(group['LapNumber'].min())}-L{int(group['LapNumber'].max())})", 'Fastest': fastest, 'Average': avg, 'Consistency': sigma, 'Degradation': deg})
                 st.dataframe(pd.DataFrame(stint_stats).sort_values(['Driver', 'Stint']), width='stretch', hide_index=True)
             
-        with tab_laps:
-            fragment_lap_times(session, drivers)
-
-        with tab_dom:
-            fragment_dominance(session, drivers)
+        with tab_laps: fragment_lap_times(session, drivers)
+        with tab_dom: fragment_dominance(session, drivers)
 
         with tab_tel:
             st.subheader("Comprehensive Telemetry Analysis")
-            st.caption("Detailed breakdown of driver inputs and car performance parameters. Select a specific driver and lap for each chart.")
             st.divider()
-
             charts = [
                 {'title': 'Speed Trace', 'metric': 'Speed', 'type': 'line', 'unit': 'km/h'},
                 {'title': 'Gear Shifts', 'metric': 'nGear', 'type': 'map', 'unit': ''},
@@ -758,16 +835,15 @@ def render_details_page(app_window):
                 {'title': 'RPM', 'metric': 'RPM', 'type': 'line', 'unit': 'RPM'},
                 {'title': 'DRS Usage', 'metric': 'DRS', 'type': 'line', 'unit': 'State'}
             ]
-
             for i in range(0, 6, 2):
                 cols = st.columns(2)
                 for j in range(2):
                     idx = i + j
-                    with cols[j]:
-                        fragment_telemetry_card(session, drivers, charts[idx], idx)
+                    with cols[j]: fragment_telemetry_card(session, drivers, charts[idx], idx)
 
         with tab_replay:
-            fragment_replay(session)
+            # fragment_replay_preloaded(session)
+            pass
     else: 
         st.warning("Unable to load data for this session.")
 
@@ -775,9 +851,7 @@ def render_details_page(app_window):
 APP_WINDOW = st.empty()
 
 if st.session_state['current_page'] == 'home': 
-    with APP_WINDOW.container():
-        render_home_page(APP_WINDOW)
+    with APP_WINDOW.container(): render_home_page(APP_WINDOW)
         
 elif st.session_state['current_page'] == 'details': 
-    with APP_WINDOW.container():
-        render_details_page(APP_WINDOW)
+    with APP_WINDOW.container(): render_details_page(APP_WINDOW)
