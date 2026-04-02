@@ -9,6 +9,7 @@ from plotly.subplots import make_subplots
 import plotly.express as px
 import time
 import streamlit.components.v1 as components 
+import json # Thư viện bắt buộc để đóng gói dữ liệu cho JS
 
 # --- PAGE CONFIG ---
 # Trong MPA, lệnh này phải nằm đầu tiên
@@ -121,113 +122,8 @@ def get_event_highlights(year, round_num):
         pass 
     return highlights
 
-
 # ==========================================
-# HÀM XỬ LÝ NỘI SUY DỮ LIỆU REPLAY
-# ==========================================
-def process_lap_data_heavy(session, lap_number):
-    """ Hàm tính toán nặng: Trích xuất DataMap và Live Timing (Pre-loaded) """
-    try:
-        laps_data = session.laps[session.laps['LapNumber'] == lap_number]
-        if laps_data.empty: return None
-        
-        min_time = laps_data['LapStartTime'].min()
-        max_time = laps_data['Time'].max()
-        
-        # 1. Xử lý Bảng Timing theo format (Position, Driver, Gap, Last Lap, Tyre)
-        timing_data = []
-        leader_time = None
-        sorted_laps = laps_data.dropna(subset=['Position']).sort_values('Position')
-        if not sorted_laps.empty: leader_time = sorted_laps.iloc[0]['Time']
-            
-        for _, row in sorted_laps.iterrows():
-            drv = row['Driver']
-            pos = int(row['Position'])
-            lap_time = row['LapTime']
-            
-            # Tính Gap to Leader
-            gap = "Leader"
-            if pos > 1 and pd.notna(row['Time']) and pd.notna(leader_time):
-                gap = f"+{(row['Time'] - leader_time).total_seconds():.3f}s"
-            elif pd.isna(row['Time']): gap = "OUT"
-            
-            # Tính Last Lap Time
-            lap_time_str = "N/A"
-            if pd.notna(lap_time):
-                lt_sec = lap_time.total_seconds()
-                lap_time_str = f"{int(lt_sec // 60)}:{lt_sec % 60:06.3f}"
-                
-            timing_data.append({
-                "Pos": pos, 
-                "Driver": drv, 
-                "Gap to Leader": gap, 
-                "Last Lap": lap_time_str, 
-                "Tyre": row.get('Compound', 'Unknown')
-            })
-
-        # 2. Xử lý dữ liệu Bản đồ Animation
-        drivers_in_lap = laps_data['Driver'].unique()
-        timestamps = pd.timedelta_range(start=min_time, end=max_time, freq='500ms')
-        df_list = []
-        color_map = {}
-        
-        for drv in drivers_in_lap:
-            try:
-                drv_lap = laps_data.pick_drivers(drv).iloc[0]
-                tel = drv_lap.get_telemetry()
-                time_col = 'SessionTime' if 'SessionTime' in tel.columns else 'Date'
-                
-                if not tel.empty and 'X' in tel.columns and time_col in tel.columns:
-                    tel_synced = tel[[time_col, 'X', 'Y']].copy()
-                    tel_synced.set_index(time_col, inplace=True)
-                    tel_synced = tel_synced[~tel_synced.index.duplicated(keep='first')]
-                    tel_synced = tel_synced.reindex(timestamps, method='nearest').reset_index()
-                    tel_synced.rename(columns={'index': 'SessionTime'}, inplace=True)
-                    
-                    tel_synced['Driver'] = drv
-                    tel_synced['TimeStr'] = "T+ " + tel_synced['SessionTime'].dt.total_seconds().round(1).astype(str) + "s"
-                    
-                    info = session.get_driver(drv)
-                    hex_color = f"#{info['TeamColor']}" if str(info['TeamColor']) != 'nan' else '#FFFFFF'
-                    tel_synced['Color'] = hex_color
-                    color_map[drv] = hex_color
-                    df_list.append(tel_synced)
-            except: pass
-            
-        map_df = pd.concat(df_list, ignore_index=True) if df_list else pd.DataFrame()
-        
-        # 3. Tạo sẵn Plotly Figure để gọi cực nhanh ở UI
-        fig_replay = None
-        if not map_df.empty:
-            ref_tel = session.laps.pick_fastest().get_telemetry()
-            fig_replay = px.scatter(
-                map_df, x="X", y="Y", animation_frame="TimeStr", animation_group="Driver",
-                color="Driver", color_discrete_map=color_map, hover_name="Driver"
-            )
-            fig_replay.update_traces(marker=dict(size=18, line=dict(width=2, color='DarkSlateGrey')))
-            fig_replay.add_trace(go.Scatter(x=ref_tel['X'], y=ref_tel['Y'], mode='lines', line=dict(color='rgba(255, 255, 255, 0.15)', width=8), hoverinfo='skip', showlegend=False))
-            fig_replay.update_layout(
-                xaxis=dict(visible=False, range=[ref_tel['X'].min()-1000, ref_tel['X'].max()+1000]), 
-                yaxis=dict(visible=False, scaleanchor="x", scaleratio=1, range=[ref_tel['Y'].min()-1000, ref_tel['Y'].max()+1000]),
-                plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', height=600, margin=dict(l=0, r=0, t=0, b=0),
-                legend=dict(orientation="h", yanchor="top", y=1.0, xanchor="center", x=0.5, font=dict(size=12))
-            )
-            fig_replay.layout.updatemenus[0].buttons[0].args[1]['frame']['duration'] = 100 
-
-        return {
-            "map_df": map_df,
-            "color_map": color_map,
-            "timing_data": timing_data,
-            "max_time": max_time,
-            "frame_count": len(timestamps),
-            "fig_replay": fig_replay
-        }
-    except Exception as e:
-        print(f"Error in heavy processing: {e}")
-        return None
-
-# ==========================================
-# CÁC KHỐI FRAGMENT
+# CÁC KHỐI FRAGMENT (Giữ nguyên cho các tab khác)
 # ==========================================
 
 @st.fragment
@@ -405,7 +301,6 @@ def fragment_dominance(session, drivers):
 
             st.divider()
             
-            # --- THÊM TIÊU ĐỀ LỚN CHO 4 ĐỒ THỊ BÊN DƯỚI ---
             st.subheader("Additional Telemetry Comparison")
             st.caption("Note: Battery Level and Steering Angle are not broadcasted publicly by the FIA. The grid displays Throttle, Brake, RPM, and DRS in independent cards.")
             
@@ -462,175 +357,408 @@ def fragment_telemetry_card(session, drivers, chart_info, idx):
                 st.plotly_chart(fig, width='stretch', config={'displayModeBar': False})
         except Exception as e: st.error(f"Lỗi vẽ biểu đồ: {str(e)}")
 
+
+# ==========================================
+# CUSTOM HTML5 CANVAS REPLAY ENGINE
+# Hệ thống Replay tuyệt đối mượt mà, đồng bộ Map, Timing và Messages
+# ==========================================
 @st.fragment
-def fragment_replay_preloaded(session):
-    st.subheader("🏎️ Full Session Live Replay")
-    st.caption("Toàn bộ dữ liệu được xử lý một lần. Bảng Timing và Thông báo (Messages) được đồng bộ tự động với bản đồ theo thời gian thực.")
+def fragment_replay_custom_engine(session):
+    st.subheader("🏎️ Full Session Live Replay (NATIVE ENGINE)")
+    st.caption("Trải nghiệm Pit Wall thực thụ. Mượt mà 60FPS. Tích hợp Bản đồ đường đua, Live Timing và Race Control đồng bộ hoàn toàn.")
     
-    # 1. Khởi tạo State & Kiểm tra thay đổi phiên đua
     session_id = f"{st.session_state.get('selected_year', '')}_{st.session_state.get('selected_event', {}).get('round', '')}"
     
     if 'replay_session_id' not in st.session_state or st.session_state['replay_session_id'] != session_id:
         st.session_state['replay_session_id'] = session_id
-        st.session_state['replay_data_store'] = {}
-        st.session_state['is_auto_playing'] = False
-        st.session_state['replay_lap_slider'] = 1
+        st.session_state.pop('js_payload', None)
 
-    max_lap_avail = int(session.laps['LapNumber'].max()) if not session.laps.empty else 1
-    
-    # 2. XỬ LÝ TIẾN TRÌNH PRE-LOAD DỮ LIỆU
-    is_fully_loaded = len(st.session_state['replay_data_store']) == max_lap_avail
-    
-    if not is_fully_loaded:
-        st.warning("⏳ Đang tải và đồng bộ tọa độ cho toàn bộ cuộc đua. Xin vui lòng chờ khoảng 1-2 phút...")
+    max_lap_avail = int(session.laps['LapNumber'].max()) if not session.laps.empty else 0
+    if max_lap_avail == 0:
+        st.warning("Không có dữ liệu Lap cho phiên đua này.")
+        return
+
+    # 1. TIẾN TRÌNH PRE-LOAD VÀ ĐÓNG GÓI JSON
+    if 'js_payload' not in st.session_state:
+        st.warning("⏳ Đang tải và đóng gói dữ liệu toàn bộ cuộc đua. Xin vui lòng chờ khoảng 1-2 phút...")
         progress_bar = st.progress(0.0)
         status_text = st.empty()
         
+        payload = {
+            "laps": {}, "messages": [], "colors": {}, "track_path": [], 
+            "max_lap": max_lap_avail, "min_x": 0, "max_x": 1, "min_y": 0, "max_y": 1
+        }
+        
+        # 1.1 Lấy màu sắc tay đua
+        drivers = session.results['Abbreviation'].dropna().unique().tolist()
+        for drv in drivers:
+            info = session.get_driver(drv)
+            payload["colors"][drv] = f"#{info['TeamColor']}" if str(info['TeamColor']) != 'nan' else '#FFFFFF'
+            
+        # 1.2 Lấy Track Path (Khung đường đua) từ Lap nhanh nhất
+        try:
+            ref_tel = session.laps.pick_fastest().get_telemetry()
+            payload["track_path"] = ref_tel[['X', 'Y']].dropna().values.tolist()
+            payload["min_x"], payload["max_x"] = float(ref_tel['X'].min()), float(ref_tel['X'].max())
+            payload["min_y"], payload["max_y"] = float(ref_tel['Y'].min()), float(ref_tel['Y'].max())
+        except: pass
+        
+        # 1.3 Lấy Thông điệp Race Control
+        rcm_df = session.race_control_messages
+        if not rcm_df.empty:
+            for _, row in rcm_df.iterrows():
+                t_val = row['Time']
+                try:
+                    if pd.api.types.is_datetime64_any_dtype(type(t_val)):
+                        if hasattr(session, 't0_date') and session.t0_date is not None:
+                            t_sec = (t_val.tz_localize(None) - session.t0_date.tz_localize(None)).total_seconds()
+                        else: t_sec = 0
+                        time_str = t_val.strftime("%H:%M:%S")
+                    else:
+                        t_sec = t_val.total_seconds()
+                        time_str = f"T+{int(t_sec//60):02d}:{int(t_sec%60):02d}"
+                        
+                    payload["messages"].append({
+                        "t_sec": float(t_sec), "time_str": time_str,
+                        "flag": str(row['Flag']), "msg": str(row['Message'])
+                    })
+                except: pass
+                
+        # 1.4 Lấy Dữ liệu cho TỪNG Lap (Vị trí & Timing)
         for lap in range(1, max_lap_avail + 1):
-            if lap not in st.session_state['replay_data_store']:
-                status_text.text(f"Đang xử lý nội suy vòng {lap}/{max_lap_avail}...")
-                lap_data = process_lap_data_heavy(session, lap)
-                st.session_state['replay_data_store'][lap] = lap_data
+            status_text.text(f"Đang biên dịch Tọa độ và Timing Vòng {lap}/{max_lap_avail}...")
+            laps_data = session.laps[session.laps['LapNumber'] == lap]
+            
+            if not laps_data.empty:
+                # Xử lý Timing
+                timing_data = []
+                leader_time = None
+                sorted_laps = laps_data.dropna(subset=['Position']).sort_values('Position')
+                if not sorted_laps.empty: leader_time = sorted_laps.iloc[0]['Time']
+                    
+                for _, row in sorted_laps.iterrows():
+                    drv = row['Driver']
+                    pos = int(row['Position'])
+                    gap = "Leader"
+                    if pos > 1 and pd.notna(row['Time']) and pd.notna(leader_time):
+                        gap = f"+{(row['Time'] - leader_time).total_seconds():.3f}s"
+                    elif pd.isna(row['Time']): gap = "OUT"
+                    
+                    lt_str = "N/A"
+                    if pd.notna(row['LapTime']):
+                        lt_sec = row['LapTime'].total_seconds()
+                        lt_str = f"{int(lt_sec // 60)}:{lt_sec % 60:06.3f}"
+                        
+                    timing_data.append({
+                        "pos": pos, "drv": drv, "gap": gap, 
+                        "last_lap": lt_str, "tyre": row.get('Compound', 'Unknown')
+                    })
+                    
+                # Xử lý Frames Tọa độ xe (Downsample 1.5s để giữ mượt + cực nhẹ)
+                frames = []
+                min_time = laps_data['LapStartTime'].min()
+                max_time = laps_data['Time'].max()
+                
+                timestamps = pd.timedelta_range(start=min_time, end=max_time, freq='1.5S')
+                df_list = []
+                for drv in laps_data['Driver'].unique():
+                    try:
+                        drv_lap = laps_data.pick_drivers(drv).iloc[0]
+                        tel = drv_lap.get_telemetry()
+                        time_col = 'SessionTime' if 'SessionTime' in tel.columns else 'Date'
+                        if not tel.empty and 'X' in tel.columns and time_col in tel.columns:
+                            tel_synced = tel[[time_col, 'X', 'Y']].copy()
+                            tel_synced.set_index(time_col, inplace=True)
+                            tel_synced = tel_synced[~tel_synced.index.duplicated(keep='first')]
+                            tel_synced = tel_synced.reindex(timestamps, method='nearest').reset_index()
+                            tel_synced.rename(columns={'index': 'SessionTime'}, inplace=True)
+                            tel_synced['Driver'] = drv
+                            df_list.append(tel_synced)
+                    except: pass
+                    
+                if df_list:
+                    map_df = pd.concat(df_list, ignore_index=True).sort_values('SessionTime').fillna(0)
+                    for t_val, group in map_df.groupby('SessionTime'):
+                        t_sec = t_val.total_seconds()
+                        cars = {str(row['Driver']): [float(row['X']), float(row['Y'])] for _, row in group.iterrows()}
+                        frames.append({"t_sec": float(t_sec), "cars": cars})
+                
+                payload["laps"][str(lap)] = {"timing": timing_data, "frames": frames}
+                
             progress_bar.progress(lap / max_lap_avail)
             
-        status_text.success("✅ Toàn bộ dữ liệu đã được nạp vào RAM! Replay đã sẵn sàng.")
-        time.sleep(1.5)
+        st.session_state['js_payload'] = payload
+        status_text.success("✅ Toàn bộ dữ liệu đã được nạp và đóng gói! Đang khởi động Player...")
+        time.sleep(1)
         status_text.empty()
         progress_bar.empty()
+        st.rerun()
 
-    # 3. ĐIỀU KHIỂN UI (SLIDER & AUTO-PLAY)
-    col_play, col_slider = st.columns([1, 6], gap="medium")
-    
-    with col_play:
-        st.markdown("<br>", unsafe_allow_html=True)
-        def toggle_play():
-            st.session_state['is_auto_playing'] = not st.session_state['is_auto_playing']
-        st.button("⏸️ Pause" if st.session_state['is_auto_playing'] else "▶️ Auto-Play", width='stretch', type='primary', on_click=toggle_play)
-            
-    with col_slider:
-        def on_slider_change():
-            st.session_state['is_auto_playing'] = False
-        current_lap = st.slider("Session Timeline (Lap)", min_value=1, max_value=max_lap_avail, key='replay_lap_slider', on_change=on_slider_change)
-
-    st.divider()
-
-    # 4. TRUY XUẤT VÀ HIỂN THỊ DỮ LIỆU ĐÃ CACHE THEO 2 HÀNG
-    lap_data = st.session_state['replay_data_store'].get(current_lap)
-    
-    if lap_data:
-        # ==========================================
-        # HÀNG 1: BẢN ĐỒ ĐƯỜNG ĐUA TRÀN VIỀN
-        # ==========================================
-        st.markdown(f"#### 🗺️ Track Map Animation - Lap {current_lap}")
-        if lap_data.get('fig_replay') is not None:
-            fig_replay = lap_data['fig_replay']
-            # Render native
-            st.plotly_chart(fig_replay, use_container_width=True, config={'displayModeBar': False}, key=f"map_{current_lap}")
-            
-            if st.session_state['is_auto_playing']:
-                anim_time = (lap_data['frame_count'] * 0.100) + 1.0
-                
-                js_director = f"""
-                <script>
-                    function startDirector() {{
-                        var parentDoc = window.parent.document;
-                        setTimeout(function() {{
-                            try {{
-                                var playBtns = parentDoc.querySelectorAll('.updatemenu-button');
-                                if (playBtns.length > 0) {{
-                                    playBtns[0].dispatchEvent(new MouseEvent('click', {{bubbles: true, cancelable: true, view: window.parent}}));
-                                }}
-                            }} catch(e) {{}}
-                        }}, 800);
-                        
-                        setTimeout(function() {{
-                            try {{
-                                var btns = parentDoc.querySelectorAll('button');
-                                for (var i = 0; i < btns.length; i++) {{
-                                    if (btns[i].innerText && btns[i].innerText.includes('Next Lap (Auto-Loading)')) {{
-                                        btns[i].click();
-                                        break;
-                                    }}
-                                }}
-                            }} catch(e) {{}}
-                        }}, {int(anim_time * 1000)});
-                    }}
-                    window.addEventListener('load', startDirector);
-                </script>
-                """
-                components.html(js_director, height=0)
-                st.info(f"Auto-playing... Next lap in {anim_time:.1f}s")
-        else: 
-            st.warning("No telemetry available to draw map for this lap.")
-
-        st.divider()
-
-        # ==========================================
-        # HÀNG 2: CHIA 2 CỘT (TIMING & RACE CONTROL)
-        # ==========================================
-        col_timing, col_msg = st.columns(2, gap="large")
+    # 2. XUẤT RA GIAO DIỆN COMPONENT (HTML5 + JS)
+    if 'js_payload' in st.session_state:
+        payload_json = json.dumps(st.session_state['js_payload'])
         
-        with col_timing:
-            st.markdown(f"#### ⏱️ Live Timing")
-            if lap_data['timing_data']:
-                st.dataframe(
-                    pd.DataFrame(lap_data['timing_data']), 
-                    use_container_width=True, hide_index=True, height=400,
-                    column_config={
-                        "Pos": st.column_config.NumberColumn("P", width="small"),
-                        "Driver": st.column_config.TextColumn("Driver", width="medium"),
-                        "Gap to Leader": st.column_config.TextColumn("Gap", width="medium"),
-                        "Last Lap": st.column_config.TextColumn("Last Lap", width="medium"),
-                        "Tyre": st.column_config.TextColumn("Tyre", width="small")
-                    }
-                )
-            else: st.info("No timing data for this lap.")
-
-        with col_msg:
-            st.markdown("#### 🚨 Race Control Messages")
-            rcm_df = session.race_control_messages
-            max_time = lap_data['max_time']
-            
-            if not rcm_df.empty and pd.notna(max_time):
-                past_messages = rcm_df.copy()
-                if pd.api.types.is_datetime64_any_dtype(past_messages['Time']):
-                    if hasattr(session, 't0_date') and session.t0_date is not None:
-                        max_wall_time = session.t0_date + max_time
-                        if past_messages['Time'].dt.tz is not None and max_wall_time.tzinfo is None: max_wall_time = max_wall_time.tz_localize(past_messages['Time'].dt.tz)
-                        elif past_messages['Time'].dt.tz is None and max_wall_time.tzinfo is not None: max_wall_time = max_wall_time.tz_convert(None) 
-                        past_messages = past_messages[past_messages['Time'] <= max_wall_time]
-                else:
-                    past_messages = past_messages[past_messages['Time'] <= max_time]
+        html_code = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ background-color: rgba(0,0,0,0); color: #fff; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; overflow: hidden; }}
+                .container {{ display: flex; flex-direction: column; height: 800px; background: #0e1117; border-radius: 8px; border: 1px solid #333; }}
                 
-                if not past_messages.empty:
-                    past_messages = past_messages.sort_values(by='Time', ascending=False)
-                    if pd.api.types.is_datetime64_any_dtype(past_messages['Time']): past_messages['TimeStr'] = past_messages['Time'].apply(lambda ts: ts.strftime("%H:%M:%S") if pd.notna(ts) else "")
-                    else: past_messages['TimeStr'] = past_messages['Time'].apply(lambda ts: f"T+{int(ts.total_seconds()//60):02d}:{int(ts.total_seconds()%60):02d}" if pd.notna(ts) else "")
-                    
-                    def style_flags(val):
-                        if 'Yellow' in str(val) or 'SC' in str(val) or 'VSC' in str(val): return 'background-color: rgba(255, 255, 0, 0.2); color: yellow;'
-                        if 'Red' in str(val): return 'background-color: rgba(255, 0, 0, 0.2); color: red;'
-                        if 'Green' in str(val) or 'Clear' in str(val): return 'background-color: rgba(0, 255, 0, 0.1); color: #00cc66;'
-                        return ''
+                /* HÀNG 1: MAP */
+                .map-row {{ flex: 1; position: relative; background: #000; border-bottom: 1px solid #333; min-height: 450px; }}
+                canvas {{ display: block; width: 100%; height: 100%; }}
+                .controls {{ position: absolute; bottom: 10px; left: 10px; right: 10px; background: rgba(20,20,20,0.8); padding: 10px 15px; border-radius: 6px; display: flex; align-items: center; gap: 15px; border: 1px solid #444; }}
+                button {{ background: #ff4b4b; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 14px; min-width: 90px;}}
+                button:hover {{ background: #ff3333; }}
+                input[type=range] {{ flex: 1; cursor: pointer; accent-color: #ff4b4b; }}
+                .lap-badge {{ position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.7); padding: 8px 15px; border-radius: 6px; font-size: 20px; font-weight: bold; color: #ff4b4b; border: 1px solid #333; }}
+                
+                /* HÀNG 2: DỮ LIỆU */
+                .data-row {{ display: flex; height: 350px; background: #0e1117; }}
+                .timing-col {{ flex: 6; overflow-y: auto; border-right: 1px solid #333; }}
+                .msg-col {{ flex: 4; overflow-y: auto; padding: 15px; background: #11141a; }}
+                
+                /* BẢNG TIMING */
+                table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+                thead {{ position: sticky; top: 0; background: #1a1c23; z-index: 10; box-shadow: 0 1px 2px rgba(0,0,0,0.5); }}
+                th {{ padding: 10px; color: #aaa; text-transform: uppercase; text-align: left; }}
+                td {{ padding: 8px 10px; border-bottom: 1px solid #222; }}
+                tr:hover {{ background: rgba(255,255,255,0.05); }}
+                
+                /* BẢNG MESSAGE */
+                .msg-header {{ color: #888; font-size: 12px; font-weight: bold; margin-bottom: 10px; text-transform: uppercase; border-bottom: 1px solid #333; padding-bottom: 8px; position: sticky; top: 0; background: #11141a;}}
+                .msg-item {{ margin-bottom: 6px; font-size: 13px; padding: 8px; border-radius: 4px; border-left: 4px solid #444; }}
+                .msg-Yellow {{ background: rgba(255, 255, 0, 0.1); border-left-color: yellow; }}
+                .msg-Red {{ background: rgba(255, 0, 0, 0.1); border-left-color: red; }}
+                .msg-Green {{ background: rgba(0, 255, 0, 0.1); border-left-color: #00cc66; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <!-- Hàng 1 -->
+                <div class="map-row">
+                    <canvas id="trackCanvas"></canvas>
+                    <div class="lap-badge" id="lapBadge">LAP 1</div>
+                    <div class="controls">
+                        <button id="playBtn">▶ Play</button>
+                        <input type="range" id="progressSlider" min="1" max="{st.session_state['js_payload']['max_lap']}" value="1" step="0.01">
+                    </div>
+                </div>
+                <!-- Hàng 2 -->
+                <div class="data-row">
+                    <div class="timing-col">
+                        <table>
+                            <thead><tr><th>P</th><th>Driver</th><th>Gap</th><th>Last Lap</th><th>Tyre</th></tr></thead>
+                            <tbody id="timing-body"></tbody>
+                        </table>
+                    </div>
+                    <div class="msg-col">
+                        <div class="msg-header">🚨 Race Control Messages</div>
+                        <div id="msgBoard"></div>
+                    </div>
+                </div>
+            </div>
+
+            <script>
+                const payload = {payload_json};
+                const canvas = document.getElementById('trackCanvas');
+                const ctx = canvas.getContext('2d');
+                const playBtn = document.getElementById('playBtn');
+                const slider = document.getElementById('progressSlider');
+                const lapBadge = document.getElementById('lapBadge');
+                
+                let currentLap = 1;
+                let currentFrameIdx = 0;
+                let isPlaying = false;
+                
+                // Hàm chia tỉ lệ tọa độ ra màn hình Canvas
+                let scale = 1, offsetX = 0, offsetY = 0;
+                function resizeCanvas() {{
+                    canvas.width = canvas.parentElement.clientWidth;
+                    canvas.height = canvas.parentElement.clientHeight;
+                    const padding = 40;
+                    const cw = canvas.width - padding * 2;
+                    const ch = canvas.height - padding * 2;
+                    const tw = payload.max_x - payload.min_x;
+                    const th = payload.max_y - payload.min_y;
+                    if(tw > 0 && th > 0) {{
+                        scale = Math.min(cw / tw, ch / th);
+                        offsetX = (canvas.width - tw * scale) / 2 - payload.min_x * scale;
+                        offsetY = (canvas.height - th * scale) / 2 - payload.min_y * scale;
+                    }}
+                    drawFullFrame();
+                }}
+                window.addEventListener('resize', resizeCanvas);
+                
+                function getX(x) {{ return x * scale + offsetX; }}
+                // Y của tọa độ địa lý F1 hướng lên, Canvas hướng xuống -> Đảo ngược
+                function getY(y) {{ return canvas.height - (y * scale + offsetY); }}
+                
+                function drawTrack() {{
+                    if(!payload.track_path || payload.track_path.length === 0) return;
+                    ctx.beginPath();
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+                    ctx.lineWidth = 10;
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    for(let i=0; i<payload.track_path.length; i++) {{
+                        let [x, y] = payload.track_path[i];
+                        if(i===0) ctx.moveTo(getX(x), getY(y));
+                        else ctx.lineTo(getX(x), getY(y));
+                    }}
+                    ctx.stroke();
+                }}
+                
+                function drawCars(cars) {{
+                    for (let drv in cars) {{
+                        let [x, y] = cars[drv];
+                        let cx = getX(x), cy = getY(y);
                         
-                    df_display = past_messages[['TimeStr', 'Category', 'Flag', 'Message']].copy()
-                    df_display.columns = ['Time', 'Category', 'Flag', 'Message']
-                    st.dataframe(df_display.style.map(style_flags, subset=['Flag', 'Message']), use_container_width=True, height=400, hide_index=True)
-                else: st.info("No incidents reported yet up to this lap.")
-            else: st.info("Race control board is empty.")
-
-        # --- NÚT BẤM ẢO CHO PHÉP JS TRÌNH DUYỆT TỰ ĐỘNG CHUYỂN VÒNG ĐUA ---
-        if st.session_state['is_auto_playing']:
-            def advance_lap():
-                if st.session_state['replay_lap_slider'] < max_lap_avail:
-                    st.session_state['replay_lap_slider'] += 1
-                else:
-                    st.session_state['is_auto_playing'] = False
-
-            # JS sẽ tự động tìm kiếm nút "Next Lap" này để click khi hết video
-            st.button("⏭️ Next Lap (Auto-Loading)", on_click=advance_lap, use_container_width=True)
-    else:
-        st.error("Dữ liệu vòng này bị lỗi hoặc không tồn tại.")
+                        ctx.fillStyle = payload.colors[drv] || '#FFF';
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, 7, 0, 2*Math.PI);
+                        ctx.fill();
+                        
+                        ctx.lineWidth = 1.5;
+                        ctx.strokeStyle = '#000';
+                        ctx.stroke();
+                        
+                        ctx.fillStyle = "white";
+                        ctx.font = "bold 11px Arial";
+                        ctx.fillText(drv, cx + 10, cy + 4);
+                    }}
+                }}
+                
+                function updateTimingTable() {{
+                    const tbody = document.getElementById('timing-body');
+                    const lapData = payload.laps[currentLap.toString()];
+                    if(!lapData) return;
+                    
+                    let html = '';
+                    lapData.timing.forEach(row => {{
+                        const color = payload.colors[row.drv] || '#FFF';
+                        html += `<tr>
+                            <td><b>${{row.pos}}</b></td>
+                            <td style="color:${{color}}; font-weight:bold;">${{row.drv}}</td>
+                            <td>${{row.gap}}</td>
+                            <td style="font-family:monospace;">${{row.last_lap}}</td>
+                            <td>${{row.tyre}}</td>
+                        </tr>`;
+                    }});
+                    tbody.innerHTML = html;
+                }}
+                
+                function updateMessages(t_sec) {{
+                    const validMsgs = payload.messages.filter(m => m.t_sec <= t_sec);
+                    validMsgs.sort((a,b) => b.t_sec - a.t_sec); // Mới nhất lên trên
+                    
+                    const mbody = document.getElementById('msgBoard');
+                    let html = '';
+                    validMsgs.forEach(m => {{
+                        let cls = 'msg-item';
+                        if(m.flag.includes('Yellow') || m.flag.includes('SC')) cls += ' msg-Yellow';
+                        else if(m.flag.includes('Red')) cls += ' msg-Red';
+                        else if(m.flag.includes('Green') || m.flag.includes('Clear')) cls += ' msg-Green';
+                        
+                        html += `<div class="${{cls}}"><span class="msg-time">${{m.time_str}}</span> | ${{m.flag}} - ${{m.msg}}</div>`;
+                    }});
+                    if(html === '') html = '<div style="color:#666;">No incidents reported yet.</div>';
+                    mbody.innerHTML = html;
+                }}
+                
+                function drawFullFrame() {{
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    drawTrack();
+                    
+                    const lapData = payload.laps[currentLap.toString()];
+                    if(lapData && lapData.frames && lapData.frames.length > 0) {{
+                        if (currentFrameIdx >= lapData.frames.length) currentFrameIdx = lapData.frames.length - 1;
+                        const frame = lapData.frames[currentFrameIdx];
+                        drawCars(frame.cars);
+                        updateMessages(frame.t_sec);
+                    }}
+                }}
+                
+                // GAME LOOP (Hoạt động siêu nhẹ)
+                let lastTime = 0;
+                const FPS_INTERVAL = 80; // Tốc độ phát 80ms mỗi frame (~ 15x tốc độ thực tế)
+                
+                function loop(timestamp) {{
+                    if(isPlaying) {{
+                        if (timestamp - lastTime >= FPS_INTERVAL) {{
+                            lastTime = timestamp;
+                            
+                            const lapData = payload.laps[currentLap.toString()];
+                            if(lapData && lapData.frames) {{
+                                currentFrameIdx++;
+                                
+                                // Nếu hết frame của 1 Lap -> Tự động qua Lap tiếp theo
+                                if (currentFrameIdx >= lapData.frames.length) {{
+                                    currentLap++;
+                                    currentFrameIdx = 0;
+                                    if (currentLap > payload.max_lap) {{
+                                        currentLap = payload.max_lap;
+                                        isPlaying = false;
+                                        playBtn.innerText = "▶ Play";
+                                        return;
+                                    }}
+                                    updateTimingTable(); // Cập nhật bảng Timing ngay khi sang vòng mới
+                                }}
+                                
+                                slider.value = currentLap + (currentFrameIdx / lapData.frames.length);
+                                lapBadge.innerText = "LAP " + currentLap;
+                                drawFullFrame();
+                            }}
+                        }}
+                    }}
+                    requestAnimationFrame(loop);
+                }}
+                
+                // SỰ KIỆN NÚT BẤM VÀ SLIDER
+                playBtn.addEventListener('click', () => {{
+                    isPlaying = !isPlaying;
+                    playBtn.innerText = isPlaying ? "⏸ Pause" : "▶ Play";
+                    if(isPlaying && currentLap >= payload.max_lap && currentFrameIdx >= (payload.laps[payload.max_lap.toString()]?.frames.length - 1 || 0)) {{
+                        currentLap = 1; currentFrameIdx = 0;
+                    }}
+                }});
+                
+                slider.addEventListener('input', (e) => {{
+                    const val = parseFloat(e.target.value);
+                    const newLap = Math.floor(val);
+                    const fraction = val - newLap;
+                    
+                    let changedLap = (newLap !== currentLap);
+                    currentLap = newLap;
+                    if(currentLap > payload.max_lap) currentLap = payload.max_lap;
+                    if(currentLap < 1) currentLap = 1;
+                    
+                    const lapData = payload.laps[currentLap.toString()];
+                    if(lapData && lapData.frames) {{
+                        currentFrameIdx = Math.floor(fraction * lapData.frames.length);
+                        if(currentFrameIdx >= lapData.frames.length) currentFrameIdx = lapData.frames.length - 1;
+                    }}
+                    
+                    lapBadge.innerText = "LAP " + currentLap;
+                    if (changedLap) updateTimingTable();
+                    drawFullFrame();
+                }});
+                
+                // Khởi chạy
+                setTimeout(() => {{
+                    resizeCanvas();
+                    updateTimingTable();
+                    drawFullFrame();
+                    requestAnimationFrame(loop);
+                }}, 100);
+            </script>
+        </body>
+        </html>
+        """
+        
+        components.html(html_code, height=850)
 
 # ==========================================
 # CÁC TRANG CỦA ỨNG DỤNG (MULTI-PAGE DEFINITIONS)
@@ -696,7 +824,6 @@ def page_home_ui():
         st.warning("No schedule data found for this season.")
 
 def page_details_ui():
-    # Kiểm tra xem người dùng có vào thẳng trang này mà chưa chọn giải đua không
     if not st.session_state.get('selected_event'):
         st.warning("Vui lòng chọn một chặng đua từ Lịch thi đấu trước.")
         if st.button("Trở về Lịch thi đấu"):
@@ -712,11 +839,11 @@ def page_details_ui():
     with col_back:
         st.write("") 
         if st.button("←", key="back_home_btn"):
-            # Dọn dẹp trạng thái UI cũ để chống ghosting bộ nhớ & reset dữ liệu Replay khi đổi phiên đua
-            keys_to_clear = [k for k in st.session_state.keys() if k.startswith(('ch_', 'sel_', 'del_', 'tel_', 'dom_')) or k in ['lt_boxes', 'lt_box_counter', 'sel_all_pos', 'is_auto_playing', 'replay_lap_slider', 'replay_session_id', 'replay_data_store']]
+            # Dọn dẹp RAM trước khi về trang chủ
+            keys_to_clear = [k for k in st.session_state.keys() if k.startswith(('ch_', 'sel_', 'del_', 'tel_', 'dom_')) or k in ['lt_boxes', 'lt_box_counter', 'sel_all_pos', 'replay_session_id', 'js_payload']]
             for key in keys_to_clear:
                 del st.session_state[key]
-            st.switch_page(page_home) # Quay về trang chủ Native
+            st.switch_page(page_home)
 
     with col_title:
         st.markdown(f"<h2 style='margin-top: 0;'><img src='{flag_url}' width='48' style='border-radius:6px; vertical-align:middle; margin-right:15px; box-shadow: 0 0 4px rgba(255,255,255,0.3);'> {event_name} {year}</h2>", unsafe_allow_html=True)
@@ -860,8 +987,7 @@ def page_details_ui():
                     with cols[j]: fragment_telemetry_card(session, drivers, charts[idx], idx)
 
         with tab_replay:
-            # Gọi lại Fragment thay vì hiển thị Message tĩnh
-            fragment_replay_preloaded(session)
+            fragment_replay_custom_engine(session)
     else: 
         st.warning("Unable to load data for this session.")
 
@@ -875,7 +1001,6 @@ page_home = st.Page(page_home_ui, title="Race Calendar", icon="📅", default=Tr
 page_details = st.Page(page_details_ui, title="Race Analysis", icon="🏎️")
 
 # 2. Đưa vào Router điều hướng của Streamlit với tham số position="hidden"
-# Điều này sẽ tự động ẩn đi danh sách trang ở Sidebar bên trái
 pg = st.navigation([page_home, page_details], position="hidden")
 
 # 3. Khởi chạy trang
