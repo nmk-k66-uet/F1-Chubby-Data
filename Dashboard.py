@@ -17,16 +17,13 @@ st.set_page_config(page_title="F1 Pulse Interactive Dashboard", layout="wide", p
 
 st.markdown("""
 <style>
-    /* Nhắm vào các thẻ div sinh ra bởi st.columns */
     [data-testid="column"] > div {
         overflow: visible !important;
     }
-    /* Ép menu dropdown của Selectbox đè lên trên và có thanh cuộn */
     div[data-baseweb="popover"] > div {
         max-height: 300px !important;
         overflow-y: auto !important;
     }
-    /* Ẩn hoàn toàn Sidebar và nút mở Sidebar ở góc trên bên trái */
     [data-testid="collapsedControl"] {
         display: none !important;
     }
@@ -36,7 +33,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Khởi tạo thư mục Cache cục bộ cho FastF1 và Replay
+# FastF1 Cache Setup
 CACHE_DIR = 'f1_cache'
 if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR)
@@ -128,7 +125,7 @@ def get_event_highlights(year, round_num):
     return highlights
 
 # ==========================================
-# CÁC KHỐI FRAGMENT CHO CÁC TAB 
+# TAB FRAGMENTS 
 # ==========================================
 
 @st.fragment
@@ -149,7 +146,7 @@ def fragment_positions(session, drivers, session_name):
                 st.checkbox("Select All", value=True, key="sel_all_pos", on_change=toggle_all)
                 selected_drivers = [drv for drv in drivers if st.checkbox(drv, key=f"ch_{drv}")]
 
-        if not selected_drivers: st.warning("👈 Please select at least one driver to view data.")
+        if not selected_drivers: st.warning("Please select at least one driver to view data.")
         else:
             fig_pos = go.Figure()
             all_laps = session.laps
@@ -309,7 +306,6 @@ def fragment_dominance(session, drivers):
             st.divider()
             
             st.subheader("Additional Telemetry Comparison")
-            st.caption("Note: Battery Level and Steering Angle are not broadcasted publicly by the FIA. The grid displays Throttle, Brake, RPM, and DRS in independent cards.")
             
             metrics = [('Throttle (%)', 'Throttle'), ('Brake', 'Brake'), ('RPM', 'RPM'), ('DRS', 'DRS')]
             for i in range(0, 4, 2):
@@ -367,10 +363,8 @@ def fragment_telemetry_card(session, drivers, chart_info, idx):
 
 # ==========================================
 # LAZY-LOADED REPLAY ENGINE (NATIVE JS)
-# Tích hợp Disk Cache và Tùy chỉnh Tốc độ Phát
 # ==========================================
 def generate_and_cache_replay_payload(session, max_lap_avail, cache_path):
-    """Hàm xử lý Data nặng chạy 1 lần và lưu Cache"""
     st.info("Extracting data... This usually takes 1-2 minutes. Please do not switch tabs.")
     progress_bar = st.progress(0.0)
     status_text = st.empty()
@@ -390,27 +384,49 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path):
         payload["track_path"] = ref_tel[['X', 'Y']].dropna().values.tolist()
         payload["min_x"], payload["max_x"] = float(ref_tel['X'].min()), float(ref_tel['X'].max())
         payload["min_y"], payload["max_y"] = float(ref_tel['Y'].min()), float(ref_tel['Y'].max())
+        
+        # --- LẤY DỮ LIỆU CÁC KHÚC CUA (CORNERS) ---
+        circuit_info = session.get_circuit_info()
+        corners_data = []
+        if circuit_info is not None and hasattr(circuit_info, 'corners'):
+            for _, row in circuit_info.corners.iterrows():
+                corners_data.append({
+                    "x": float(row['X']),
+                    "y": float(row['Y']),
+                    "number": str(row.get('Number', ''))
+                })
+        payload["corners"] = corners_data
+        # ----------------------------------------
     except: pass
     
     rcm_df = session.race_control_messages
     if not rcm_df.empty:
         for _, row in rcm_df.iterrows():
-            t_val = row['Time']
+            t_val = row.get('Time')
+            if pd.isna(t_val):
+                continue
+                
             try:
-                if pd.api.types.is_datetime64_any_dtype(type(t_val)):
-                    if hasattr(session, 't0_date') and session.t0_date is not None:
-                        t_sec = (t_val.tz_localize(None) - session.t0_date.tz_localize(None)).total_seconds()
-                    else: t_sec = 0
-                    time_str = t_val.strftime("%H:%M:%S")
-                else:
+                if hasattr(t_val, 'total_seconds'): # Nó là Timedelta
                     t_sec = t_val.total_seconds()
                     time_str = f"T+{int(t_sec//60):02d}:{int(t_sec%60):02d}"
+                else: # Nó là Datetime (Timestamp)
+                    if hasattr(session, 't0_date') and session.t0_date is not None:
+                        t_val_no_tz = t_val.tz_localize(None) if t_val.tzinfo else t_val
+                        t0_no_tz = session.t0_date.tz_localize(None) if session.t0_date.tzinfo else session.t0_date
+                        t_sec = (t_val_no_tz - t0_no_tz).total_seconds()
+                    else: 
+                        t_sec = 0
+                    time_str = t_val.strftime("%H:%M:%S")
                     
+                flag_str = str(row['Flag']) if 'Flag' in row and pd.notna(row['Flag']) else "INFO"
+                
                 payload["messages"].append({
                     "t_sec": float(t_sec), "time_str": time_str,
-                    "flag": str(row['Flag']), "msg": str(row['Message'])
+                    "flag": flag_str, "msg": str(row.get('Message', ''))
                 })
-            except: pass
+            except Exception as e:
+                pass
             
     status_text.text("Extracting Live Timing data for all laps...")
     for lap in range(1, max_lap_avail + 1):
@@ -443,7 +459,7 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path):
     status_text.text("Interpolating car trajectories (Continuous Timeline)...")
     min_time = session.laps['LapStartTime'].dropna().min()
     max_time = session.laps['Time'].dropna().max()
-    timestamps = pd.timedelta_range(start=min_time, end=max_time, freq='400ms')
+    timestamps = pd.timedelta_range(start=min_time, end=max_time, freq='100ms')
     
     df_list = []
     for i, drv in enumerate(drivers):
@@ -472,14 +488,13 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path):
             payload["frames"].append({"t_sec": float(t_sec), "cars": cars})
         payload["frames"].sort(key=lambda x: x["t_sec"])
         
-    # Ghi dữ liệu vào File JSON
-    with open(cache_path, 'w') as f:
-        json.dump(payload, f)
+    with open(cache_path, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
         
     st.session_state['js_payload'] = payload
     st.session_state['replay_session_id'] = cache_path
     
-    status_text.success("✅ All data generated and cached successfully! Starting Engine...")
+    status_text.success("✅ All data generated and cached successfully! Starting Replay...")
     time.sleep(1)
     status_text.empty()
     progress_bar.empty()
@@ -493,27 +508,26 @@ def fragment_replay_continuous(session, year, round_num, session_code):
         st.warning("No lap data available for this session.")
         return
 
-    # Đường dẫn Cache Cục bộ
     cache_filename = f"replay_{year}_{round_num}_{session_code}.json"
     cache_path = os.path.join(CACHE_DIR, cache_filename)
     
-    # KHI CHƯA LOAD DỮ LIỆU VÀO RAM
+    # Loading data to RAM
     if 'js_payload' not in st.session_state or st.session_state.get('replay_session_id') != cache_path:
         if os.path.exists(cache_path):
-            # Nếu Cache file đã tồn tại trên đĩa -> Đọc cực nhanh
+            # If Cache file exists, load it into session state
             with st.spinner("Loading Replay package from local cache..."):
-                with open(cache_path, 'r') as f:
+                with open(cache_path, 'r', encoding='utf-8') as f:
                     st.session_state['js_payload'] = json.load(f)
                 st.session_state['replay_session_id'] = cache_path
         else:
-            # Nếu chưa có Cache -> Bắt đầu Lazy Load khi người dùng bấm Nút
+            # If no cache, show info and button to generate
             st.info("Replay data is not cached yet. Generating it requires processing all telemetry points for 20 cars.")
             if st.button("Load & Generate Replay Data", type="primary"):
                 generate_and_cache_replay_payload(session, max_lap_avail, cache_path)
                 st.rerun(scope="fragment")
-            return # Dừng vẽ UI nếu chưa có data
+            return
 
-    # 2. XUẤT GIAO DIỆN CHẠY BẰNG NATIVE JS KHI ĐÃ CÓ DATA
+    # JS Payload for displaying
     if 'js_payload' in st.session_state:
         payload_json = json.dumps(st.session_state['js_payload'])
         
@@ -525,36 +539,39 @@ def fragment_replay_continuous(session, year, round_num, session_code):
                 body {{ background-color: rgba(0,0,0,0); color: #fff; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; overflow: hidden; }}
                 .container {{ display: flex; flex-direction: column; height: 1000px; background: #0e1117; border-radius: 8px; border: 1px solid #333; }}
                 
-                /* ĐÃ SỬA: SỬ DỤNG FLEXBOX ĐỂ TÁCH BIỆT BẢN ĐỒ VÀ THANH CÔNG CỤ */
                 .map-row {{ flex: 2; display: flex; flex-direction: column; background: #000; border-bottom: 1px solid #333; min-height: 600px; }}
                 .canvas-wrapper {{ flex: 1; position: relative; min-height: 0; }}
                 canvas {{ display: block; width: 100%; height: 100%; }}
                 
-                /* ĐÃ SỬA: XÓA position: absolute ĐỂ THANH CÔNG CỤ KHÔNG NỔI LÊN TRÊN BẢN ĐỒ */
                 .controls {{ background: rgba(15,15,15,1); padding: 12px 20px; display: flex; align-items: center; gap: 20px; border-top: 1px solid #333; }}
                 button {{ background: #ff4b4b; color: white; border: none; padding: 8px 18px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 15px; min-width: 100px; transition: 0.2s;}}
                 button:hover {{ background: #ff3333; }}
                 input[type=range] {{ flex: 1; cursor: pointer; accent-color: #ff4b4b; }}
                 .lap-badge {{ position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.8); padding: 10px 20px; border-radius: 6px; font-size: 22px; font-weight: bold; color: #ff4b4b; border: 1px solid #333; z-index: 10;}}
                 
-                /* TÙY CHỈNH TỐC ĐỘ PHÁT */
                 .speed-control {{ display: flex; align-items: center; gap: 8px; color: #ccc; font-weight: bold; font-size: 14px; }}
                 .speed-control select {{ background: #222; color: #fff; border: 1px solid #555; padding: 6px 10px; border-radius: 4px; cursor: pointer; outline: none; font-weight: bold; }}
                 
-                /* HÀNG 2: DỮ LIỆU */
                 .data-row {{ display: flex; height: 400px; background: #0e1117; }}
                 .timing-col {{ flex: 6; overflow-y: auto; border-right: 1px solid #333; padding-right: 5px; }}
-                .msg-col {{ flex: 4; overflow-y: auto; padding: 15px; background: #11141a; }}
                 
-                /* BẢNG TIMING */
+                .msg-col {{ flex: 4; overflow-y: auto; background: #11141a; position: relative; }}
+                
                 table {{ width: 100%; border-collapse: collapse; font-size: 13.5px; }}
                 thead {{ position: sticky; top: 0; background: #1a1c23; z-index: 10; box-shadow: 0 2px 4px rgba(0,0,0,0.6); }}
                 th {{ padding: 12px; color: #aaa; text-transform: uppercase; text-align: left; }}
                 td {{ padding: 10px 12px; border-bottom: 1px solid #222; }}
                 tr:hover {{ background: rgba(255,255,255,0.05); }}
                 
-                /* BẢNG MESSAGE */
-                .msg-header {{ color: #888; font-size: 13px; font-weight: bold; margin-bottom: 10px; text-transform: uppercase; border-bottom: 1px solid #333; padding-bottom: 8px; position: sticky; top: 0; background: #11141a; z-index: 5;}}
+                .msg-header {{ 
+                    color: #888; font-size: 13px; font-weight: bold; 
+                    padding: 15px 15px 10px 15px; margin: 0; 
+                    text-transform: uppercase; border-bottom: 1px solid #333; 
+                    position: sticky; top: 0; background: #11141a; z-index: 5; 
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.4); 
+                }}
+                #msgBoard {{ padding: 10px 15px 15px 15px; }}
+                
                 .msg-item {{ margin-bottom: 6px; font-size: 13px; padding: 8px 10px; border-radius: 4px; border-left: 4px solid #444; line-height: 1.4; }}
                 .msg-Yellow {{ background: rgba(255, 255, 0, 0.1); border-left-color: yellow; }}
                 .msg-Red {{ background: rgba(255, 0, 0, 0.1); border-left-color: red; }}
@@ -591,7 +608,7 @@ def fragment_replay_continuous(session, year, round_num, session_code):
                         </table>
                     </div>
                     <div class="msg-col">
-                        <div class="msg-header">🚨 Race Control Messages</div>
+                        <div class="msg-header">Race Control Messages</div>
                         <div id="msgBoard"></div>
                     </div>
                 </div>
@@ -619,7 +636,6 @@ def fragment_replay_continuous(session, year, round_num, session_code):
                     speedMultiplier = parseFloat(e.target.value);
                 }});
                 
-                // ĐÃ SỬA: Đưa thuật toán co giãn về chuẩn (Padding đều đặn 40px)
                 let scale = 1, offsetX = 0, offsetY = 0;
                 function resizeCanvas() {{
                     canvas.width = canvas.parentElement.clientWidth;
@@ -656,7 +672,54 @@ def fragment_replay_continuous(session, year, round_num, session_code):
                     ctx.stroke();
                 }}
                 
-                function drawCars(cars) {{
+                function drawAnnotations() {{
+                    // 1. Vẽ Vạch đích
+                    if (payload.track_path && payload.track_path.length > 5) {{
+                        let [x0, y0] = payload.track_path[0];
+                        let [x1, y1] = payload.track_path[5];
+                        
+                        let dx = x1 - x0;
+                        let dy = y1 - y0;
+                        let len = Math.sqrt(dx*dx + dy*dy);
+                        let nx = (-dy / len) * 300; 
+                        let ny = (dx / len) * 300;
+                        
+                        let px0 = getX(x0 - nx), py0 = getY(y0 - ny);
+                        let px1 = getX(x0 + nx), py1 = getY(y0 + ny);
+
+                        ctx.beginPath();
+                        ctx.strokeStyle = '#FFFFFF';
+                        ctx.lineWidth = 4;
+                        ctx.moveTo(px0, py0);
+                        ctx.lineTo(px1, py1);
+                        ctx.stroke();
+                        
+                        ctx.fillStyle = "white";
+                        ctx.font = "bold 13px Arial";
+                        ctx.fillText("FINISH", px1 + 5, py1);
+                    }}
+
+                    // 2. Vẽ các khúc cua (Corners)
+                    if (payload.corners && payload.corners.length > 0) {{
+                        ctx.fillStyle = "#ff4b4b";
+                        ctx.font = "bold 12px Arial";
+                        
+                        payload.corners.forEach(c => {{
+                            if (c.number && c.number !== "nan") {{
+                                let cx = getX(c.x);
+                                let cy = getY(c.y);
+                                
+                                ctx.beginPath();
+                                ctx.arc(cx, cy, 3, 0, 2*Math.PI);
+                                ctx.fill();
+                                
+                                ctx.fillText("T" + c.number, cx + 6, cy - 6);
+                            }}
+                        }});
+                    }}
+                }}
+                
+                function drawCarsExact(cars) {{
                     for (let drv in cars) {{
                         let [x, y] = cars[drv];
                         let cx = getX(x), cy = getY(y);
@@ -726,17 +789,20 @@ def fragment_replay_continuous(session, year, round_num, session_code):
                     if(payload.frames.length === 0) return;
                     ctx.clearRect(0, 0, canvas.width, canvas.height);
                     drawTrack();
+                    drawAnnotations(); // GỌI HÀM VẼ GHI CHÚ
                     
-                    const frame = payload.frames[Math.floor(currentFrameIdx)];
+                    let idx = Math.floor(currentFrameIdx);
+                    if (idx >= payload.frames.length) idx = payload.frames.length - 1;
+                    
+                    const frame = payload.frames[idx];
                     if(frame) {{
-                        drawCars(frame.cars);
+                        drawCarsExact(frame.cars);
                         syncDataByTime(frame.t_sec);
                     }}
                 }}
                 
                 let lastTime = 0;
-                let accumulator = 0;
-                const BASE_INTERVAL = 400; 
+                const PYTHON_FRAME_DURATION_MS = 100; 
                 
                 function loop(timestamp) {{
                     if(isPlaying) {{
@@ -744,21 +810,17 @@ def fragment_replay_continuous(session, year, round_num, session_code):
                         let dt = timestamp - lastTime;
                         lastTime = timestamp;
                         
-                        accumulator += dt / (BASE_INTERVAL / speedMultiplier);
-                        if (accumulator >= 1) {{
-                            let framesToAdvance = Math.floor(accumulator);
-                            currentFrameIdx += framesToAdvance;
-                            accumulator -= framesToAdvance;
-                            
-                            if (currentFrameIdx >= payload.frames.length) {{
-                                currentFrameIdx = payload.frames.length - 1;
-                                isPlaying = false;
-                                playBtn.innerText = "▶ Play";
-                            }} else {{
-                                slider.value = currentFrameIdx;
-                            }}
-                            drawFullFrame();
+                        let framesToAdvance = (dt * speedMultiplier) / PYTHON_FRAME_DURATION_MS;
+                        currentFrameIdx += framesToAdvance;
+                        
+                        if (currentFrameIdx >= payload.frames.length - 1) {{
+                            currentFrameIdx = payload.frames.length - 1;
+                            isPlaying = false;
+                            playBtn.innerText = "▶ Play";
                         }}
+                        
+                        slider.value = Math.floor(currentFrameIdx);
+                        drawFullFrame();
                     }} else {{
                         lastTime = 0;
                     }}
@@ -794,7 +856,7 @@ def fragment_replay_continuous(session, year, round_num, session_code):
         components.html(html_code, height=1050)
 
 # ==========================================
-# CÁC TRANG CỦA ỨNG DỤNG (MULTI-PAGE DEFINITIONS)
+# MULTI-PAGE DEFINITIONS
 # ==========================================
 
 def page_home_ui():
@@ -804,7 +866,7 @@ def page_home_ui():
         st.markdown("Explore race schedules, results, and in-depth performance analysis.")
     with col_sel:
         st.markdown("<br>", unsafe_allow_html=True)
-        selected_year = st.selectbox("📅 Select Season:", [2026, 2025, 2024, 2023, 2022, 2021], index=[2026, 2025, 2024, 2023, 2022, 2021].index(st.session_state['selected_year']), label_visibility="collapsed")
+        selected_year = st.selectbox("📅 Select Season:", [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018], index=[2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018].index(st.session_state['selected_year']), label_visibility="collapsed")
         st.session_state['selected_year'] = selected_year
 
     st.divider()
@@ -1023,7 +1085,7 @@ def page_details_ui():
 
 
 # ==========================================
-# THIẾT LẬP NATIVE MULTI-PAGE ROUTING
+# MULTI-PAGE ROUTING
 # ==========================================
 page_home = st.Page(page_home_ui, title="Race Calendar", icon="📅", default=True)
 page_details = st.Page(page_details_ui, title="Race Analysis", icon="🏎️")
