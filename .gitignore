@@ -208,4 +208,6 @@ __marimo__/
 
 /myenv
 
-/f1_cache
+f1_cache
+
+MLCore.py
