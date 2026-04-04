@@ -12,6 +12,9 @@ import os
 import json
 import streamlit.components.v1 as components 
 
+# IMPORT LÕI MACHINE LEARNING
+import MLCore
+
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="F1 Pulse Interactive Dashboard", layout="wide", page_icon="🏎️")
 
@@ -385,7 +388,6 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path):
         payload["min_x"], payload["max_x"] = float(ref_tel['X'].min()), float(ref_tel['X'].max())
         payload["min_y"], payload["max_y"] = float(ref_tel['Y'].min()), float(ref_tel['Y'].max())
         
-        # --- LẤY DỮ LIỆU CÁC KHÚC CUA (CORNERS) ---
         circuit_info = session.get_circuit_info()
         corners_data = []
         if circuit_info is not None and hasattr(circuit_info, 'corners'):
@@ -396,7 +398,6 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path):
                     "number": str(row.get('Number', ''))
                 })
         payload["corners"] = corners_data
-        # ----------------------------------------
     except: pass
     
     rcm_df = session.race_control_messages
@@ -511,23 +512,19 @@ def fragment_replay_continuous(session, year, round_num, session_code):
     cache_filename = f"replay_{year}_{round_num}_{session_code}.json"
     cache_path = os.path.join(CACHE_DIR, cache_filename)
     
-    # Loading data to RAM
     if 'js_payload' not in st.session_state or st.session_state.get('replay_session_id') != cache_path:
         if os.path.exists(cache_path):
-            # If Cache file exists, load it into session state
             with st.spinner("Loading Replay package from local cache..."):
                 with open(cache_path, 'r', encoding='utf-8') as f:
                     st.session_state['js_payload'] = json.load(f)
                 st.session_state['replay_session_id'] = cache_path
         else:
-            # If no cache, show info and button to generate
             st.info("Replay data is not cached yet. Generating it requires processing all telemetry points for 20 cars.")
             if st.button("Load & Generate Replay Data", type="primary"):
                 generate_and_cache_replay_payload(session, max_lap_avail, cache_path)
                 st.rerun(scope="fragment")
             return
 
-    # JS Payload for displaying
     if 'js_payload' in st.session_state:
         payload_json = json.dumps(st.session_state['js_payload'])
         
@@ -673,7 +670,6 @@ def fragment_replay_continuous(session, year, round_num, session_code):
                 }}
                 
                 function drawAnnotations() {{
-                    // 1. Vẽ Vạch đích
                     if (payload.track_path && payload.track_path.length > 5) {{
                         let [x0, y0] = payload.track_path[0];
                         let [x1, y1] = payload.track_path[5];
@@ -699,7 +695,6 @@ def fragment_replay_continuous(session, year, round_num, session_code):
                         ctx.fillText("FINISH", px1 + 5, py1);
                     }}
 
-                    // 2. Vẽ các khúc cua (Corners)
                     if (payload.corners && payload.corners.length > 0) {{
                         ctx.fillStyle = "#ff4b4b";
                         ctx.font = "bold 12px Arial";
@@ -789,7 +784,7 @@ def fragment_replay_continuous(session, year, round_num, session_code):
                     if(payload.frames.length === 0) return;
                     ctx.clearRect(0, 0, canvas.width, canvas.height);
                     drawTrack();
-                    drawAnnotations(); // GỌI HÀM VẼ GHI CHÚ
+                    drawAnnotations(); 
                     
                     let idx = Math.floor(currentFrameIdx);
                     if (idx >= payload.frames.length) idx = payload.frames.length - 1;
@@ -854,6 +849,7 @@ def fragment_replay_continuous(session, year, round_num, session_code):
         """
         
         components.html(html_code, height=1050)
+
 
 # ==========================================
 # MULTI-PAGE DEFINITIONS
@@ -933,7 +929,8 @@ def page_details_ui():
     with col_back:
         st.write("") 
         if st.button("←", key="back_home_btn"):
-            keys_to_clear = [k for k in st.session_state.keys() if k.startswith(('ch_', 'sel_', 'del_', 'tel_', 'dom_')) or k in ['lt_boxes', 'lt_box_counter', 'sel_all_pos', 'replay_session_id', 'js_payload']]
+            # THÊM 'predictions_race_id' VÀ 'predictions_df' VÀO DANH SÁCH XÓA KHI ẤN BACK
+            keys_to_clear = [k for k in st.session_state.keys() if k.startswith(('ch_', 'sel_', 'del_', 'tel_', 'dom_')) or k in ['lt_boxes', 'lt_box_counter', 'sel_all_pos', 'replay_session_id', 'js_payload', 'predictions_race_id', 'predictions_df']]
             for key in keys_to_clear:
                 del st.session_state[key]
             st.switch_page(page_home)
@@ -985,9 +982,10 @@ def page_details_ui():
     if session is not None:
         drivers = session.results['Abbreviation'].dropna().unique().tolist()
 
-        tab_res, tab_pos, tab_strat, tab_laps, tab_dom, tab_tel, tab_replay = st.tabs([
+        # THÊM TAB "🔮 AI Predictions" VÀO DANH SÁCH
+        tab_res, tab_pos, tab_strat, tab_laps, tab_dom, tab_tel, tab_predict, tab_replay = st.tabs([
             "📊 Results", "📈 Positions", "⏱️ Strategy", "⏱️ Lap Times", 
-            "🗺️ Track Dominance", "📉 Telemetry", " 🎥 Replay"
+            "🗺️ Track Dominance", "📉 Telemetry", "🔮 AI Predictions", "🎥 Replay"
         ])
         
         with tab_res:
@@ -1078,6 +1076,105 @@ def page_details_ui():
                     idx = i + j
                     with cols[j]: fragment_telemetry_card(session, drivers, charts[idx], idx)
 
+        # ==========================================
+        # KHỐI HIỂN THỊ TÍNH NĂNG PREDICTION
+        # ==========================================
+        with tab_predict:
+            st.subheader("🔮 Pre-Race Podium Probability Predictor")
+            st.caption("AI Model (Random Forest) predicts the probability of finishing in the Top 3 based on Grid Position, Team Strength, Qualifying Pace, FP2 Long Run Pace, and Driver Form.")
+            
+            # Tạo ID độc nhất cho phiên để reset cache nếu chuyển chặng đua
+            current_race_id = f"{year}_{round_num}"
+            if st.session_state.get('predictions_race_id') != current_race_id:
+                st.session_state.pop('predictions_df', None)
+            
+            col_btn1, col_btn2 = st.columns([1, 1])
+            with col_btn1:
+                run_ai = st.button("🚀 Generate AI Predictions for this Race", type="primary", use_container_width=True)
+            with col_btn2:
+                # Tính năng retrain này chỉ để admin gọi, hoặc dùng khi đã update DataCrawler
+                retrain_ai = st.button("🔄 Retrain ML Model (If fresh data exists)", use_container_width=True)
+                
+            if retrain_ai:
+                with st.spinner("Đang huấn luyện lại mô hình từ dữ liệu lịch sử..."):
+                    MLCore.initialize_model(force_retrain=True)
+                    st.success("Đã huấn luyện lại thành công!")
+                    
+            if run_ai:
+                with st.spinner("Đang trích xuất dữ liệu vòng loại, FP2 và chạy mô hình AI... (Mất khoảng 10-15s)"):
+                    try:
+                        # 1. Nạp mô hình (Rất nhanh vì đã cache trong MLCore)
+                        model = MLCore.initialize_model(force_retrain=False)
+                        
+                        # 2. Tính toán Features từ FastF1
+                        inference_df = MLCore.prepare_race_features(year, round_num)
+                        
+                        # 3. Dự đoán
+                        preds_df = MLCore.predict_podium_probabilities(model, inference_df)
+                        
+                        # Lưu vào session state
+                        st.session_state['predictions_df'] = preds_df
+                        st.session_state['predictions_race_id'] = current_race_id
+                        
+                    except Exception as e:
+                        st.error(f"Lỗi khi dự đoán: {str(e)}")
+
+            # NẾU CÓ DỮ LIỆU DỰ ĐOÁN TRONG RAM THÌ HIỂN THỊ
+            if 'predictions_df' in st.session_state:
+                predictions_df = st.session_state['predictions_df']
+                st.divider()
+                
+                col_chart, col_insight = st.columns([2.5, 1.5])
+                
+                with col_chart:
+                    # Vẽ biểu đồ
+                    top_10_df = predictions_df.head(10).sort_values('Podium_Probability', ascending=True)
+                    fig_pred = px.bar(
+                        top_10_df, 
+                        x='Podium_Probability', 
+                        y='Driver',
+                        orientation='h',
+                        color='Driver',
+                        color_discrete_map={row['Driver']: row['Color'] for _, row in predictions_df.iterrows()},
+                        text=top_10_df['Podium_Probability'].apply(lambda x: f"{x:.1%}")
+                    )
+                    
+                    fig_pred.update_layout(
+                        title="Top 10 Podium Probabilities",
+                        xaxis_title="Probability to Finish in Top 3",
+                        yaxis_title="",
+                        xaxis=dict(tickformat=".0%", range=[0, 1]),
+                        showlegend=False,
+                        height=500,
+                        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                        margin=dict(l=0, r=0, t=40, b=0)
+                    )
+                    fig_pred.update_traces(textposition='outside', cliponaxis=False)
+                    st.plotly_chart(fig_pred, use_container_width=True)
+                
+                with col_insight:
+                    st.markdown("### 🤖 ML Insights")
+                    top_driver = predictions_df.iloc[0]
+                    # Tìm ngựa ô: Xuất phát ngoài Top 4 nhưng có cơ hội lọt Podium > 10%
+                    dark_horses = predictions_df[(predictions_df['GridPosition'] > 4) & (predictions_df['Podium_Probability'] > 0.1)]
+                    dark_horse = dark_horses.iloc[0] if not dark_horses.empty else None
+                    
+                    st.info(f"🏆 **Top Contender:**\n\n**{top_driver['FullName']}** có cơ hội cao nhất ({top_driver['Podium_Probability']:.1%}) với vị trí xuất phát P{top_driver['GridPosition']}.")
+                    
+                    if dark_horse is not None:
+                        st.warning(f"🐎 **Dark Horse Alert:**\n\nHãy dè chừng **{dark_horse['FullName']}**. Mặc dù xuất phát ở P{dark_horse['GridPosition']}, mô hình AI vẫn đánh giá tay đua này có {dark_horse['Podium_Probability']:.1%} cơ hội lọt vào Top 3.")
+                    
+                    st.write("") # Spacer
+                    
+                    # Hiện Report Metrics từ file txt
+                    metrics_path = os.path.join('f1_cache', 'model_metrics.txt')
+                    if os.path.exists(metrics_path):
+                        with open(metrics_path, 'r', encoding='utf-8') as f:
+                            metrics_text = f.read()
+                        with st.expander("📊 Xem độ tin cậy của mô hình (Model Metrics)"):
+                            st.code(metrics_text, language='text')
+
+        # ==========================================
         with tab_replay:
             fragment_replay_continuous(session, year, round_num, session_code)
     else: 

@@ -6,11 +6,14 @@ import fastf1
 from datetime import datetime
 import warnings
 
+# Tắt cảnh báo để giao diện console sạch sẽ
 warnings.filterwarnings("ignore")
 
 CACHE_DIR = 'f1_cache'
 DATA_PATH = os.path.join(CACHE_DIR, 'historical_data_v2.csv')
 
+# Cấu hình Delay (Tránh giới hạn API 500 requests/giờ)
+# Một chặng đua tải 3 phiên (Q, FP2/S, R). Delay 15s là một khoảng thời gian cực kỳ an toàn.
 API_DELAY_SECONDS = 15  
 
 if not os.path.exists(CACHE_DIR):
@@ -63,19 +66,19 @@ def extract_fp2_long_run_pace(session):
 
 def crawl_data():
     print("=" * 60)
-    print("Starting Data Crawler")
+    print("🚀 BẮT ĐẦU TRÌNH CÀO DỮ LIỆU F1 (RESUMABLE CRAWLER) 🚀")
     print("=" * 60)
     
-    # Check for existing data to enable auto-resume
+    # ĐỌC LẠI DỮ LIỆU CŨ ĐỂ AUTO-RESUME
     if os.path.exists(DATA_PATH):
         df = pd.read_csv(DATA_PATH)
         crawled_rounds = set(zip(df['Year'], df['Round']))
-        print(f"[*] Found {len(df)} records.")
-        print(f"[*] Already crawled {len(crawled_rounds)} rounds. Will automatically skip these.\n")
+        print(f"[*] Tìm thấy file dữ liệu hiện tại với {len(df)} bản ghi.")
+        print(f"[*] Đã cào được {len(crawled_rounds)} chặng đua. Sẽ tự động bỏ qua các chặng này.\n")
     else:
         df = pd.DataFrame()
         crawled_rounds = set()
-        print("[*] No existing data found. Starting crawl from scratch.\n")
+        print("[*] Không tìm thấy dữ liệu cũ. Bắt đầu cào từ đầu.\n")
 
     start_year = 2022
     end_year = datetime.now().year
@@ -93,9 +96,10 @@ def crawl_data():
             round_num = event['RoundNumber']
             event_name = event['EventName']
 
-            # 1. Race Results & Form Calculation
+            # 1. TẢI RACE RESULT ĐỂ TÍNH ĐIỂM (BẮT BUỘC CHO DRIVER FORM)
             try:
                 race = fastf1.get_session(year, round_num, 'R')
+                # Load cache rất nhanh, không hit API nếu đã lưu
                 race.load(telemetry=False, weather=False, messages=False)
                 r_results = race.results
                 
@@ -108,20 +112,20 @@ def crawl_data():
                     drv = row['Abbreviation']
                     driver_points[drv] = driver_points.get(drv, 0) + pd.to_numeric(row['Points'], errors='coerce')
             except Exception as e:
-                print(f"[!] Error loading Race round {round_num} year {year}: {e}")
+                print(f"[!] Lỗi đọc Race chặng {round_num} năm {year}: {e}")
                 continue
 
-            # 2. AUTO-RESUME CHECK
+            # 2. KIỂM TRA AUTO-RESUME
             if (year, round_num) in crawled_rounds:
-                print(f"[SKIP] Already have data: {year} - Round {round_num} ({event_name})")
+                print(f"[SKIP] Đã có dữ liệu: {year} - Chặng {round_num} ({event_name})")
                 continue
 
-            # 3. Crawl Qualifying, FP2, and Build Dataset
-            print(f"\n[CRAWL] Loading data: {year} - Round {round_num} ({event_name})...")
+            # 3. CÀO DỮ LIỆU MỚI TỪ API
+            print(f"\n[CRAWL] Đang tải dữ liệu: {year} - Chặng {round_num} ({event_name})...")
             round_data = []
             
             try:
-                # Qualifying
+                # Lấy Qualifying
                 qualy = fastf1.get_session(year, round_num, 'Q')
                 qualy.load(telemetry=False, weather=False, messages=False)
                 q_results = qualy.results
@@ -130,14 +134,17 @@ def crawl_data():
                     all_q_times = q_results.apply(extract_best_q_time, axis=1).dropna()
                     if not all_q_times.empty: pole_time = all_q_times.min()
 
-                # FP2 Long Run Pace
+                # Tự động xác định lấy FP2 hay lấy Sprint Race ('S')
+                format_type = event.get('EventFormat', 'conventional').lower()
+                pace_session_code = 'S' if format_type in ['sprint', 'sprint_qualifying'] else 'FP2'
+
                 fp2_deltas = {}
                 try:
-                    fp2 = fastf1.get_session(year, round_num, 'FP2')
-                    fp2_deltas = extract_fp2_long_run_pace(fp2)
+                    pace_session = fastf1.get_session(year, round_num, pace_session_code)
+                    fp2_deltas = extract_fp2_long_run_pace(pace_session)
                 except: pass
 
-                # Features Extraction
+                # Xây dựng Features
                 for _, row in r_results.iterrows():
                     driver = row['Abbreviation']
                     grid_pos = pd.to_numeric(row['GridPosition'], errors='coerce')
@@ -166,21 +173,21 @@ def crawl_data():
                         'DriverForm': float(form), 'Podium': is_podium
                     })
 
-                # Save after each round
+                # LƯU DỮ LIỆU SAU MỖI CHẶNG
                 if round_data:
                     new_df = pd.DataFrame(round_data)
                     df = pd.concat([df, new_df], ignore_index=True)
                     df.to_csv(DATA_PATH, index=False)
                     crawled_rounds.add((year, round_num))
                     
-                    print(f"  -> [OK] Saved successfully. Pausing {API_DELAY_SECONDS}s ...")
+                    print(f"  -> [OK] Đã lưu thành công. Tạm nghỉ {API_DELAY_SECONDS}s tránh Rate Limit...")
                     time.sleep(API_DELAY_SECONDS)
 
             except Exception as e:
-                print(f"  -> [ERROR] Error occurred while crawling: {e}")
+                print(f"  -> [ERROR] Lỗi API khi cào: {e}")
                 time.sleep(API_DELAY_SECONDS)
 
-    print("\n✅ Data crawling completed.")
+    print("\n✅ HOÀN TẤT TOÀN BỘ QUÁ TRÌNH CÀO DỮ LIỆU!")
 
 if __name__ == '__main__':
     crawl_data()
