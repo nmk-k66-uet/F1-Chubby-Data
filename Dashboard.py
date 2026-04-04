@@ -10,6 +10,7 @@ import plotly.express as px
 import time
 import os
 import json
+from google import genai
 import streamlit.components.v1 as components 
 
 # IMPORT LÕI MACHINE LEARNING
@@ -929,8 +930,7 @@ def page_details_ui():
     with col_back:
         st.write("") 
         if st.button("←", key="back_home_btn"):
-            # THÊM 'predictions_race_id' VÀ 'predictions_df' VÀO DANH SÁCH XÓA KHI ẤN BACK
-            keys_to_clear = [k for k in st.session_state.keys() if k.startswith(('ch_', 'sel_', 'del_', 'tel_', 'dom_')) or k in ['lt_boxes', 'lt_box_counter', 'sel_all_pos', 'replay_session_id', 'js_payload', 'predictions_race_id', 'predictions_df']]
+            keys_to_clear = [k for k in st.session_state.keys() if k.startswith(('ch_', 'sel_', 'del_', 'tel_', 'dom_')) or k in ['lt_boxes', 'lt_box_counter', 'sel_all_pos', 'replay_session_id', 'js_payload', 'predictions_race_id', 'predictions_df', 'gemini_insight', 'setup_profiler_fig']]
             for key in keys_to_clear:
                 del st.session_state[key]
             st.switch_page(page_home)
@@ -982,10 +982,9 @@ def page_details_ui():
     if session is not None:
         drivers = session.results['Abbreviation'].dropna().unique().tolist()
 
-        # THÊM TAB "🔮 AI Predictions" VÀO DANH SÁCH
         tab_res, tab_pos, tab_strat, tab_laps, tab_dom, tab_tel, tab_predict, tab_replay = st.tabs([
             "📊 Results", "📈 Positions", "⏱️ Strategy", "⏱️ Lap Times", 
-            "🗺️ Track Dominance", "📉 Telemetry", "🔮 AI Predictions", "🎥 Replay"
+            "🗺️ Track Dominance", "📉 Telemetry", "✨ Race Predictor", "🎥 Replay"
         ])
         
         with tab_res:
@@ -1077,58 +1076,147 @@ def page_details_ui():
                     with cols[j]: fragment_telemetry_card(session, drivers, charts[idx], idx)
 
         # ==========================================
-        # KHỐI HIỂN THỊ TÍNH NĂNG PREDICTION
+        # Race Predictor Tab
         # ==========================================
         with tab_predict:
-            st.subheader("🔮 Pre-Race Podium Probability Predictor")
-            st.caption("AI Model (Random Forest) predicts the probability of finishing in the Top 3 based on Grid Position, Team Strength, Qualifying Pace, FP2 Long Run Pace, and Driver Form.")
+            st.subheader("Pre-Race Podium Probability Predictor")
+            st.caption("AI Model predicts the probability of finishing in the Top 3 based on Grid Position, Team Strength, Qualifying Pace, Long Run Pace (FP2/Sprint), and Driver Form.")
             
-            # Tạo ID độc nhất cho phiên để reset cache nếu chuyển chặng đua
+            # Create unique ID for the session to reset cache if race changes
             current_race_id = f"{year}_{round_num}"
             if st.session_state.get('predictions_race_id') != current_race_id:
                 st.session_state.pop('predictions_df', None)
+                st.session_state.pop('setup_profiler_fig', None)
+                st.session_state.pop('gemini_insight', None)
+            
+            # Gemini API Client
+            gemini_key = ""
+            key_file_path = "assets/gemini_key.txt"
+            if os.path.exists(key_file_path):
+                with open(key_file_path, "r", encoding="utf-8") as f:
+                    gemini_key = f.read().strip()
+            
+            gemini_client = None
+            if gemini_key:
+                gemini_client = genai.Client(api_key=gemini_key)
             
             col_btn1, col_btn2 = st.columns([1, 1])
             with col_btn1:
-                run_ai = st.button("🚀 Generate AI Predictions for this Race", type="primary", use_container_width=True)
+                run_ai = st.button("Generate Predictions & Analysis", type="primary", width='stretch')
             with col_btn2:
-                # Tính năng retrain này chỉ để admin gọi, hoặc dùng khi đã update DataCrawler
-                retrain_ai = st.button("🔄 Retrain ML Model (If fresh data exists)", use_container_width=True)
+                retrain_ai = st.button("Retrain Model (If fresh data exists)", width='stretch')
                 
             if retrain_ai:
-                with st.spinner("Đang huấn luyện lại mô hình từ dữ liệu lịch sử..."):
+                with st.spinner("Retraining the model from historical data..."):
                     MLCore.initialize_model(force_retrain=True)
-                    st.success("Đã huấn luyện lại thành công!")
+                    st.success("Model retrained successfully!")
                     
             if run_ai:
-                with st.spinner("Đang trích xuất dữ liệu vòng loại, FP2 và chạy mô hình AI... (Mất khoảng 10-15s)"):
+                with st.spinner("Extracting data, analyzing Setup, and generating AI insights... (Takes about 15-20s)"):
                     try:
-                        # 1. Nạp mô hình (Rất nhanh vì đã cache trong MLCore)
+                        # 1. Load ML model, prepare features, and generate predictions
                         model = MLCore.initialize_model(force_retrain=False)
-                        
-                        # 2. Tính toán Features từ FastF1
                         inference_df = MLCore.prepare_race_features(year, round_num)
-                        
-                        # 3. Dự đoán
                         preds_df = MLCore.predict_podium_probabilities(model, inference_df)
                         
-                        # Lưu vào session state
                         st.session_state['predictions_df'] = preds_df
                         st.session_state['predictions_race_id'] = current_race_id
                         
-                    except Exception as e:
-                        st.error(f"Lỗi khi dự đoán: {str(e)}")
+                        # 2. Setup Profiler (Top Speed vs Average Speed)
+                        setup_data = []
+                        top_10_drivers = preds_df.head(10)
+                        
+                        for _, row in top_10_drivers.iterrows():
+                            drv = row['Driver']
+                            try:
+                                drv_lap = session.laps.pick_drivers(drv).pick_fastest()
+                                if not pd.isna(drv_lap['LapTime']):
+                                    tel = drv_lap.get_telemetry()
+                                    if not tel.empty and 'Speed' in tel.columns:
+                                        avg_speed = tel['Speed'].mean()
+                                        top_speed = tel['Speed'].max()
+                                        setup_data.append({
+                                            'Driver': drv,
+                                            'FullName': row['FullName'],
+                                            'Top Speed (km/h)': top_speed,
+                                            'Average Speed (km/h)': avg_speed,
+                                            'Color': row['Color']
+                                        })
+                            except:
+                                pass
+                                
+                        if setup_data:
+                            setup_df = pd.DataFrame(setup_data)
+                            fig_setup = px.scatter(
+                                setup_df, x='Average Speed (km/h)', y='Top Speed (km/h)',
+                                text='Driver', color='Driver',
+                                color_discrete_map={r['Driver']: r['Color'] for _, r in setup_df.iterrows()}
+                            )
+                            fig_setup.update_traces(textposition='top center', marker=dict(size=14, line=dict(width=1, color='White')))
+                            fig_setup.update_layout(
+                                title=dict(text="Setup Profiler (Downforce vs Drag)", font=dict(size=16)),
+                                xaxis_title="Average Speed (Higher = Better Downforce & Cornering)",
+                                yaxis_title="Top Speed (Higher = Lower Drag & Straight Speed)",
+                                showlegend=False,
+                                height=500,
+                                plot_bgcolor='rgba(20,20,20,0.5)', paper_bgcolor='rgba(0,0,0,0)',
+                                margin=dict(l=0, r=0, t=50, b=0),
+                                xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
+                                yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
+                            )
+                            # Save plot to session state for display in the right column
+                            st.session_state['setup_profiler_fig'] = fig_setup
+                        
+                        # 3. Gemini Insight Generation
+                        if gemini_client:
+                            prompt_data = preds_df.head(10)[['Driver', 'FullName', 'GridPosition', 'Podium_Probability', 'QualifyingDelta', 'FP2_PaceDelta']].to_string(index=False)
+                            prompt = f"""
+                            You are a world-class F1 Chief Race Engineer.
+                            Analyze the following pre-race data for the {event_name} {year} race. 
+                            Do NOT mention that this data comes from an AI or Machine Learning model. Treat these values as your own engineering team's telemetry and simulations.
 
-            # NẾU CÓ DỮ LIỆU DỰ ĐOÁN TRONG RAM THÌ HIỂN THỊ
+                            DATA TABLE:
+                            {prompt_data}
+
+                            Metrics context:
+                            - GridPosition: Starting grid slot.
+                            - Podium_Probability: Calculated chance of finishing in the Top 3.
+                            - QualifyingDelta: One-lap pace deficit to the pole sitter.
+                            - FP2_PaceDelta: Average long-run race pace deficit.
+
+                            Requirements:
+                            Write a highly technical, structured tactical briefing (approx 200-250 words) entirely in English.
+                            Format the output using clear bullet points and bold headings.
+                            Must include:
+                            - Primary Contenders: Technical breakdown of the favorites based on their Qualifying Delta and Grid Position.
+                            - The Dark Horse: Identify a driver starting outside the Top 4 with strong long-run pace (FP2_PaceDelta) capable of a podium finish.
+                            - Strategic Implications: Brief mention of how track position vs. race pace will dictate the stint strategies.
+                            Keep the tone analytical, precise, and strictly data-driven.
+                            """
+                            response = gemini_client.models.generate_content(
+                                model='gemini-2.5-flash',
+                                contents=prompt
+                            )
+                            st.session_state['gemini_insight'] = response.text
+                        else:
+                            st.session_state['gemini_insight'] = "⚠️ Gemini API Key not found! Please create a file named 'gemini_key.txt' in the same directory and paste your API key inside to enable AI commentary."
+
+                    except Exception as e:
+                        st.error(f"Analysis error: {str(e)}")
+
+            # ==========================================
+            # DISPLAY IF PREDICTION DATA EXISTS IN RAM
+            # ==========================================
             if 'predictions_df' in st.session_state:
                 predictions_df = st.session_state['predictions_df']
                 st.divider()
+                st.markdown("### Podium Probability Predictions")
                 
-                col_chart, col_insight = st.columns([2.5, 1.5])
+                col_chart, col_setup = st.columns([1.2, 1])
                 
                 with col_chart:
-                    # Vẽ biểu đồ
-                    top_10_df = predictions_df.head(10).sort_values('Podium_Probability', ascending=True)
+                    # 1. Prediction Bar Chart
+                    top_10_df = predictions_df.head(10).sort_values('Podium_Probability', ascending=False)
                     fig_pred = px.bar(
                         top_10_df, 
                         x='Podium_Probability', 
@@ -1138,41 +1226,33 @@ def page_details_ui():
                         color_discrete_map={row['Driver']: row['Color'] for _, row in predictions_df.iterrows()},
                         text=top_10_df['Podium_Probability'].apply(lambda x: f"{x:.1%}")
                     )
-                    
                     fig_pred.update_layout(
-                        title="Top 10 Podium Probabilities",
+                        title=dict(text="Top 10 Prediction Probabilities", font=dict(size=16)),
                         xaxis_title="Probability to Finish in Top 3",
                         yaxis_title="",
+                        yaxis=dict(categoryorder='total ascending'),
                         xaxis=dict(tickformat=".0%", range=[0, 1]),
                         showlegend=False,
                         height=500,
                         plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                        margin=dict(l=0, r=0, t=40, b=0)
+                        margin=dict(l=0, r=0, t=50, b=0)
                     )
                     fig_pred.update_traces(textposition='outside', cliponaxis=False)
-                    st.plotly_chart(fig_pred, use_container_width=True)
+                    st.plotly_chart(fig_pred, width='stretch')
                 
-                with col_insight:
-                    st.markdown("### 🤖 ML Insights")
-                    top_driver = predictions_df.iloc[0]
-                    # Tìm ngựa ô: Xuất phát ngoài Top 4 nhưng có cơ hội lọt Podium > 10%
-                    dark_horses = predictions_df[(predictions_df['GridPosition'] > 4) & (predictions_df['Podium_Probability'] > 0.1)]
-                    dark_horse = dark_horses.iloc[0] if not dark_horses.empty else None
-                    
-                    st.info(f"🏆 **Top Contender:**\n\n**{top_driver['FullName']}** có cơ hội cao nhất ({top_driver['Podium_Probability']:.1%}) với vị trí xuất phát P{top_driver['GridPosition']}.")
-                    
-                    if dark_horse is not None:
-                        st.warning(f"🐎 **Dark Horse Alert:**\n\nHãy dè chừng **{dark_horse['FullName']}**. Mặc dù xuất phát ở P{dark_horse['GridPosition']}, mô hình AI vẫn đánh giá tay đua này có {dark_horse['Podium_Probability']:.1%} cơ hội lọt vào Top 3.")
-                    
-                    st.write("") # Spacer
-                    
-                    # Hiện Report Metrics từ file txt
-                    metrics_path = os.path.join('f1_cache', 'model_metrics.txt')
-                    if os.path.exists(metrics_path):
-                        with open(metrics_path, 'r', encoding='utf-8') as f:
-                            metrics_text = f.read()
-                        with st.expander("📊 Xem độ tin cậy của mô hình (Model Metrics)"):
-                            st.code(metrics_text, language='text')
+                with col_setup:
+                    # 2. Setup Profiler Chart
+                    if 'setup_profiler_fig' in st.session_state:
+                        st.plotly_chart(st.session_state['setup_profiler_fig'], width='stretch')
+                    else:
+                        st.info("Insufficient Telemetry data to plot the Setup Profiler for this session.")
+
+                # 3. Gemini Insight Section
+                st.divider()
+                st.markdown("### Tactical Analysis Assistant")
+                
+                if 'gemini_insight' in st.session_state:
+                    st.markdown(st.session_state['gemini_insight'])
 
         # ==========================================
         with tab_replay:

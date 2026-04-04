@@ -6,15 +6,12 @@ import fastf1
 from datetime import datetime
 import warnings
 
-# Tắt cảnh báo để giao diện console sạch sẽ
 warnings.filterwarnings("ignore")
 
 CACHE_DIR = 'f1_cache'
-DATA_PATH = os.path.join(CACHE_DIR, 'historical_data_v2.csv')
+DATA_PATH = os.path.join(CACHE_DIR, 'historical_data.csv')
 
-# Cấu hình Delay (Tránh giới hạn API 500 requests/giờ)
-# Một chặng đua tải 3 phiên (Q, FP2/S, R). Delay 15s là một khoảng thời gian cực kỳ an toàn.
-API_DELAY_SECONDS = 15  
+API_DELAY_SECONDS = 30  
 
 if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR)
