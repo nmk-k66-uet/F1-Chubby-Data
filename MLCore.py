@@ -11,12 +11,16 @@ import warnings
 warnings.filterwarnings("ignore")
 
 CACHE_DIR = 'f1_cache'
-MODEL_PATH = os.path.join(CACHE_DIR, 'podium_model.pkl')
+ASSET_DIR = 'assets/Models'
+MODEL_PATH = os.path.join(ASSET_DIR, 'podium_model.pkl')
 DATA_PATH = os.path.join(CACHE_DIR, 'historical_data.csv')
 METRICS_PATH = os.path.join(CACHE_DIR, 'model_metrics.txt')
 
 if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR)
+
+if not os.path.exists(ASSET_DIR):
+    os.makedirs(ASSET_DIR)
 fastf1.Cache.enable_cache(CACHE_DIR)
 fastf1.set_log_level('ERROR')
 
