@@ -388,17 +388,6 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path):
         payload["track_path"] = ref_tel[['X', 'Y']].dropna().values.tolist()
         payload["min_x"], payload["max_x"] = float(ref_tel['X'].min()), float(ref_tel['X'].max())
         payload["min_y"], payload["max_y"] = float(ref_tel['Y'].min()), float(ref_tel['Y'].max())
-        
-        circuit_info = session.get_circuit_info()
-        corners_data = []
-        if circuit_info is not None and hasattr(circuit_info, 'corners'):
-            for _, row in circuit_info.corners.iterrows():
-                corners_data.append({
-                    "x": float(row['X']),
-                    "y": float(row['Y']),
-                    "number": str(row.get('Number', ''))
-                })
-        payload["corners"] = corners_data
     except: pass
     
     rcm_df = session.race_control_messages
@@ -670,51 +659,6 @@ def fragment_replay_continuous(session, year, round_num, session_code):
                     ctx.stroke();
                 }}
                 
-                function drawAnnotations() {{
-                    if (payload.track_path && payload.track_path.length > 5) {{
-                        let [x0, y0] = payload.track_path[0];
-                        let [x1, y1] = payload.track_path[5];
-                        
-                        let dx = x1 - x0;
-                        let dy = y1 - y0;
-                        let len = Math.sqrt(dx*dx + dy*dy);
-                        let nx = (-dy / len) * 300; 
-                        let ny = (dx / len) * 300;
-                        
-                        let px0 = getX(x0 - nx), py0 = getY(y0 - ny);
-                        let px1 = getX(x0 + nx), py1 = getY(y0 + ny);
-
-                        ctx.beginPath();
-                        ctx.strokeStyle = '#FFFFFF';
-                        ctx.lineWidth = 4;
-                        ctx.moveTo(px0, py0);
-                        ctx.lineTo(px1, py1);
-                        ctx.stroke();
-                        
-                        ctx.fillStyle = "white";
-                        ctx.font = "bold 13px Arial";
-                        ctx.fillText("FINISH", px1 + 5, py1);
-                    }}
-
-                    if (payload.corners && payload.corners.length > 0) {{
-                        ctx.fillStyle = "#ff4b4b";
-                        ctx.font = "bold 12px Arial";
-                        
-                        payload.corners.forEach(c => {{
-                            if (c.number && c.number !== "nan") {{
-                                let cx = getX(c.x);
-                                let cy = getY(c.y);
-                                
-                                ctx.beginPath();
-                                ctx.arc(cx, cy, 3, 0, 2*Math.PI);
-                                ctx.fill();
-                                
-                                ctx.fillText("T" + c.number, cx + 6, cy - 6);
-                            }}
-                        }});
-                    }}
-                }}
-                
                 function drawCarsExact(cars) {{
                     for (let drv in cars) {{
                         let [x, y] = cars[drv];
@@ -785,7 +729,6 @@ def fragment_replay_continuous(session, year, round_num, session_code):
                     if(payload.frames.length === 0) return;
                     ctx.clearRect(0, 0, canvas.width, canvas.height);
                     drawTrack();
-                    drawAnnotations(); 
                     
                     let idx = Math.floor(currentFrameIdx);
                     if (idx >= payload.frames.length) idx = payload.frames.length - 1;
@@ -1076,20 +1019,18 @@ def page_details_ui():
                     with cols[j]: fragment_telemetry_card(session, drivers, charts[idx], idx)
 
         # ==========================================
-        # Race Predictor Tab
+        # Race Predictor Tab (Cập nhật tương thích với MLCore mới)
         # ==========================================
         with tab_predict:
             st.subheader("Pre-Race Podium Probability Predictor")
-            st.caption("AI Model predicts the probability of finishing in the Top 3 based on Grid Position, Team Strength, Qualifying Pace, Long Run Pace (FP2/Sprint), and Driver Form.")
             
-            # Create unique ID for the session to reset cache if race changes
             current_race_id = f"{year}_{round_num}"
             if st.session_state.get('predictions_race_id') != current_race_id:
                 st.session_state.pop('predictions_df', None)
                 st.session_state.pop('setup_profiler_fig', None)
                 st.session_state.pop('gemini_insight', None)
             
-            # Gemini API Client
+            # Đọc Gemini API Key từ file
             gemini_key = ""
             key_file_path = "assets/gemini_key.txt"
             if os.path.exists(key_file_path):
@@ -1102,9 +1043,10 @@ def page_details_ui():
             
             col_btn1, col_btn2 = st.columns([1, 1])
             with col_btn1:
-                run_ai = st.button("Generate Predictions & Analysis", type="primary", width='stretch')
+                run_ai = st.button("Generate Predictions & Analysis", type="primary", use_container_width=True)
             with col_btn2:
-                retrain_ai = st.button("Retrain Model (If fresh data exists)", width='stretch')
+                # Gọi hàm từ MLCore để train lại nếu cần
+                retrain_ai = st.button("Retrain Model (If fresh data exists)", use_container_width=True)
                 
             if retrain_ai:
                 with st.spinner("Retraining the model from historical data..."):
@@ -1112,86 +1054,91 @@ def page_details_ui():
                     st.success("Model retrained successfully!")
                     
             if run_ai:
-                with st.spinner("Extracting data, analyzing Setup, and generating AI insights... (Takes about 15-20s)"):
+                with st.spinner("Running simulations and generating technical insights..."):
                     try:
-                        # 1. Load ML model, prepare features, and generate predictions
-                        model = MLCore.initialize_model(force_retrain=False)
-                        inference_df = MLCore.prepare_race_features(year, round_num)
-                        preds_df = MLCore.predict_podium_probabilities(model, inference_df)
+                        # 1. Gọi Module 1 từ MLCore
+                        model = MLCore.initialize_model(force_retrain=False) 
+                        inference_df = MLCore.prepare_race_features(year, round_num) 
+                        preds_df = MLCore.predict_podium_probabilities(model, inference_df) 
                         
                         st.session_state['predictions_df'] = preds_df
                         st.session_state['predictions_race_id'] = current_race_id
                         
-                        # 2. Setup Profiler (Top Speed vs Average Speed)
+                        # 2. Xây dựng Setup Profiler (Top Speed vs Average Speed)
                         setup_data = []
-                        top_10_drivers = preds_df.head(10)
-                        
-                        for _, row in top_10_drivers.iterrows():
+                        for _, row in preds_df.head(10).iterrows():
                             drv = row['Driver']
                             try:
                                 drv_lap = session.laps.pick_drivers(drv).pick_fastest()
                                 if not pd.isna(drv_lap['LapTime']):
                                     tel = drv_lap.get_telemetry()
                                     if not tel.empty and 'Speed' in tel.columns:
-                                        avg_speed = tel['Speed'].mean()
-                                        top_speed = tel['Speed'].max()
                                         setup_data.append({
                                             'Driver': drv,
                                             'FullName': row['FullName'],
-                                            'Top Speed (km/h)': top_speed,
-                                            'Average Speed (km/h)': avg_speed,
+                                            'Top Speed (km/h)': tel['Speed'].max(),
+                                            'Average Speed (km/h)': tel['Speed'].mean(),
                                             'Color': row['Color']
                                         })
-                            except:
-                                pass
+                            except: pass
                                 
                         if setup_data:
                             setup_df = pd.DataFrame(setup_data)
+                            avg_x = setup_df['Average Speed (km/h)'].mean()
+                            avg_y = setup_df['Top Speed (km/h)'].mean()
+
                             fig_setup = px.scatter(
                                 setup_df, x='Average Speed (km/h)', y='Top Speed (km/h)',
                                 text='Driver', color='Driver',
                                 color_discrete_map={r['Driver']: r['Color'] for _, r in setup_df.iterrows()}
                             )
                             fig_setup.update_traces(textposition='top center', marker=dict(size=14, line=dict(width=1, color='White')))
+                            
+                            # Add the Profiler Cross (Axes)
+                            fig_setup.add_vline(x=avg_x, line_dash="dash", line_color="rgba(255,255,255,0.3)")
+                            fig_setup.add_hline(y=avg_y, line_dash="dash", line_color="rgba(255,255,255,0.3)")
+
+                            # Add Quadrant Labels
+                            # Top Right
+                            fig_setup.add_annotation(xref="paper", yref="paper", x=0.95, y=0.95, text="<b>Efficient</b><br>(High DF / Low Drag)", showarrow=False, font=dict(color="#00cc66", size=11), align="right")
+                            # Bottom Right
+                            fig_setup.add_annotation(xref="paper", yref="paper", x=0.95, y=0.05, text="<b>High Drag</b><br>(Downforce Focused)", showarrow=False, font=dict(color="#ff4b4b", size=11), align="right")
+                            # Top Left
+                            fig_setup.add_annotation(xref="paper", yref="paper", x=0.05, y=0.95, text="<b>Low Drag</b><br>(Speed Focused)", showarrow=False, font=dict(color="#00ccff", size=11), align="left")
+                            # Bottom Left
+                            fig_setup.add_annotation(xref="paper", yref="paper", x=0.05, y=0.05, text="<b>Inefficient</b><br>(Low DF / High Drag)", showarrow=False, font=dict(color="#888", size=11), align="left")
+
                             fig_setup.update_layout(
-                                title=dict(text="Setup Profiler (Downforce vs Drag)", font=dict(size=16)),
-                                xaxis_title="Average Speed (Higher = Better Downforce & Cornering)",
-                                yaxis_title="Top Speed (Higher = Lower Drag & Straight Speed)",
-                                showlegend=False,
-                                height=500,
+                                title=dict(text="🏎️ Setup Profiler (Downforce vs Drag)", font=dict(size=16)),
+                                xaxis_title="Average Speed (Higher = Better Downforce)",
+                                yaxis_title="Top Speed (Higher = Lower Drag)",
+                                showlegend=False, height=500,
                                 plot_bgcolor='rgba(20,20,20,0.5)', paper_bgcolor='rgba(0,0,0,0)',
                                 margin=dict(l=0, r=0, t=50, b=0),
                                 xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
                                 yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
                             )
-                            # Save plot to session state for display in the right column
                             st.session_state['setup_profiler_fig'] = fig_setup
                         
-                        # 3. Gemini Insight Generation
+                        # 3. Prompt Gemini chuyên sâu về kỹ thuật
                         if gemini_client:
                             prompt_data = preds_df.head(10)[['Driver', 'FullName', 'GridPosition', 'Podium_Probability', 'QualifyingDelta', 'FP2_PaceDelta']].to_string(index=False)
                             prompt = f"""
                             You are a world-class F1 Chief Race Engineer.
-                            Analyze the following pre-race data for the {event_name} {year} race. 
-                            Do NOT mention that this data comes from an AI or Machine Learning model. Treat these values as your own engineering team's telemetry and simulations.
+                            Analyze the following race simulation data for the {event_name} {year}. 
+                            Do NOT mention AI or Machine Learning. Treat these values as internal engineering simulations.
 
-                            DATA TABLE:
+                            SIMULATION DATA:
                             {prompt_data}
 
-                            Metrics context:
-                            - GridPosition: Starting grid slot.
-                            - Podium_Probability: Calculated chance of finishing in the Top 3.
-                            - QualifyingDelta: One-lap pace deficit to the pole sitter.
-                            - FP2_PaceDelta: Average long-run race pace deficit.
-
                             Requirements:
-                            Write a highly technical, structured tactical briefing (approx 200-250 words) entirely in English.
-                            Format the output using clear bullet points and bold headings.
-                            Must include:
-                            - Primary Contenders: Technical breakdown of the favorites based on their Qualifying Delta and Grid Position.
-                            - The Dark Horse: Identify a driver starting outside the Top 4 with strong long-run pace (FP2_PaceDelta) capable of a podium finish.
-                            - Strategic Implications: Brief mention of how track position vs. race pace will dictate the stint strategies.
-                            Keep the tone analytical, precise, and strictly data-driven.
+                            - Provide a highly technical tactical briefing (200-250 words) in English.
+                            - Use clear bold headings and bullet points for readability.
+                            - Focus on:
+                                * Primary Contenders: Analyze favorites based on Qualifying Delta and simulation probabilities.
+                                * Tactical 'Dark Horse': Identify a driver outside the Top 4 with strong long-run pace (FP2_PaceDelta) likely to challenge the podium.
+                                * Strategic Implications: Impact of track position vs. race pace on pit window decisions.
+                            - Tone: Strictly data-driven, precise, and professional.
                             """
                             response = gemini_client.models.generate_content(
                                 model='gemini-2.5-flash',
@@ -1199,14 +1146,12 @@ def page_details_ui():
                             )
                             st.session_state['gemini_insight'] = response.text
                         else:
-                            st.session_state['gemini_insight'] = "⚠️ Gemini API Key not found! Please create a file named 'gemini_key.txt' in the same directory and paste your API key inside to enable AI commentary."
+                            st.session_state['gemini_insight'] = "⚠️ Gemini API Key not found in assets/gemini_key.txt."
 
                     except Exception as e:
                         st.error(f"Analysis error: {str(e)}")
 
-            # ==========================================
-            # DISPLAY IF PREDICTION DATA EXISTS IN RAM
-            # ==========================================
+            # --- HIỂN THỊ KẾT QUẢ ---
             if 'predictions_df' in st.session_state:
                 predictions_df = st.session_state['predictions_df']
                 st.divider()
@@ -1215,8 +1160,8 @@ def page_details_ui():
                 col_chart, col_setup = st.columns([1.2, 1])
                 
                 with col_chart:
-                    # 1. Prediction Bar Chart
-                    top_10_df = predictions_df.head(10).sort_values('Podium_Probability', ascending=False)
+                    # Sắp xếp tăng dần (True) để Plotly vẽ giá trị cao nhất lên ĐẦU trục Y
+                    top_10_df = predictions_df.head(10).sort_values('Podium_Probability', ascending=True)
                     fig_pred = px.bar(
                         top_10_df, 
                         x='Podium_Probability', 
@@ -1227,13 +1172,12 @@ def page_details_ui():
                         text=top_10_df['Podium_Probability'].apply(lambda x: f"{x:.1%}")
                     )
                     fig_pred.update_layout(
-                        title=dict(text="Top 10 Prediction Probabilities", font=dict(size=16)),
+                        title=dict(text="Top 10 Probability Standings", font=dict(size=16)),
                         xaxis_title="Probability to Finish in Top 3",
                         yaxis_title="",
                         yaxis=dict(categoryorder='total ascending'),
                         xaxis=dict(tickformat=".0%", range=[0, 1]),
-                        showlegend=False,
-                        height=500,
+                        showlegend=False, height=500,
                         plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
                         margin=dict(l=0, r=0, t=50, b=0)
                     )
@@ -1241,17 +1185,16 @@ def page_details_ui():
                     st.plotly_chart(fig_pred, width='stretch')
                 
                 with col_setup:
-                    # 2. Setup Profiler Chart
                     if 'setup_profiler_fig' in st.session_state:
                         st.plotly_chart(st.session_state['setup_profiler_fig'], width='stretch')
                     else:
-                        st.info("Insufficient Telemetry data to plot the Setup Profiler for this session.")
+                        st.info("Insufficient Telemetry data for Setup Profiler.")
 
-                # 3. Gemini Insight Section
+                # Gemini Insight Section
                 st.divider()
                 st.markdown("### Tactical Analysis Assistant")
-                
                 if 'gemini_insight' in st.session_state:
+                    # Hiển thị trực tiếp kết quả Markdown để giữ bullet points
                     st.markdown(st.session_state['gemini_insight'])
 
         # ==========================================
