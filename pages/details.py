@@ -2,14 +2,13 @@ import streamlit as st
 import pandas as pd
 import fastf1
 
-# Import cấu hình và data loader
 from core.config import get_flag_url
 from core.data_loader import get_event_highlights, load_f1_session
 
-# Import toàn bộ các components (Đã lưu ý import tab_position theo yêu cầu của bạn)
-from components.tab_results import fragment_results
+# Import các components UI
+from components.tab_results import fragment_results, fragment_practice_results, get_practice_results_df
 from components.tab_positions import fragment_positions
-from components.tab_strategy import fragment_strategy
+from components.tab_strategy import fragment_strategy, fragment_practice_strategy
 from components.tab_lap_times import fragment_lap_times
 from components.tab_track_dominance import fragment_dominance
 from components.tab_telemetry import render_telemetry_tab
@@ -32,7 +31,6 @@ def render():
     st.divider()
     col_back, col_title, col_session = st.columns([0.15, 3.5, 1.2])
 
-    # NÚT QUAY LẠI VÀ XÓA CACHE
     with col_back:
         st.write("") 
         if st.button("←", key="back_home_btn"):
@@ -44,18 +42,17 @@ def render():
     with col_title:
         st.markdown(f"<h2 style='margin-top: 0;'><img src='{flag_url}' width='48' style='border-radius:6px; vertical-align:middle; margin-right:15px; box-shadow: 0 0 4px rgba(255,255,255,0.3);'> {event_name} {year}</h2>", unsafe_allow_html=True)
     
-    # CHỌN PHIÊN ĐUA (SESSION)
     with col_session:
         schedule = fastf1.get_event_schedule(year)
         event_row = schedule[schedule['RoundNumber'] == round_num].iloc[0]
         format_type = event_row.get('EventFormat', 'conventional').lower()
         
         if format_type == 'sprint':
-            available_sessions = ["Sprint", "Sprint Shootout", "Qualifying", "Race"]
-            session_map = {"Sprint": "S", "Sprint Shootout": "SS", "Qualifying": "Q", "Race": "R"}
+            available_sessions = ["FP1", "Sprint", "Sprint Shootout", "Qualifying", "Race"]
+            session_map = {"FP1": "FP1", "Sprint": "S", "Sprint Shootout": "SS", "Qualifying": "Q", "Race": "R"}
         elif format_type == 'sprint_qualifying': 
-            available_sessions = ["Sprint Qualifying", "Sprint", "Qualifying", "Race"]
-            session_map = {"Sprint Qualifying": "SQ", "Sprint": "S", "Qualifying": "Q", "Race": "R"}
+            available_sessions = ["FP1", "Sprint Qualifying", "Sprint", "Qualifying", "Race"]
+            session_map = {"FP1": "FP1", "Sprint Qualifying": "SQ", "Sprint": "S", "Qualifying": "Q", "Race": "R"}
         else:
             available_sessions = ["FP1", "FP2", "FP3", "Qualifying", "Race"]
             session_map = {"FP1": "FP1", "FP2": "FP2", "FP3": "FP3", "Qualifying": "Q", "Race": "R"}
@@ -63,7 +60,6 @@ def render():
         selected_session_name = st.selectbox("Select Session:", available_sessions, index=len(available_sessions)-1, label_visibility="collapsed")
         session_code = session_map[selected_session_name]
 
-    # --- TẢI VÀ HIỂN THỊ HIGHLIGHTS ---
     with st.spinner(f"Loading session details for {selected_session_name}..."):
         session = load_f1_session(year, round_num, session_code)
 
@@ -73,10 +69,12 @@ def render():
 
     drivers = session.results['Abbreviation'].dropna().unique().tolist()
 
-    # PHÂN NHÁNH HIGHLIGHTS (PRACTICE VS RACE)
+    # --- PHÂN NHÁNH HIGHLIGHTS ---
     if session_code.startswith('FP'):
         st.subheader(f"Session Highlights - {selected_session_name}")
-        practice_top3 = session.results.nsmallest(3, 'BestLapTime')
+        # Sắp xếp theo Position để lấy chính xác P1, P2, P3 của phiên practice
+        practice_df = get_practice_results_df(session)
+        practice_top3 = practice_df.head(3)
         
         col_p1, col_p2, col_p3 = st.columns(3)
         p_cols = [col_p1, col_p2, col_p3]
@@ -85,18 +83,14 @@ def render():
             if i >= 3: break
             with p_cols[i]:
                 with st.container(border=True):
-                    t_val = row['BestLapTime']
-                    if pd.notna(t_val):
-                        ts = t_val.total_seconds()
-                        time_str = f"{int(ts // 60)}:{ts % 60:06.3f}"
-                    else:
-                        time_str = "No Time"
+                    time_str = row['Fastest Lap']
+                    driver_name = row['Driver']
                     
                     st.markdown(f"""
                         <div style='display: flex; justify-content: space-between;'>
                             <div>
                                 <div style='color: #888; font-size: 0.85rem; font-weight: bold;'>P{i+1}</div>
-                                <div style='font-size: 1.4rem; font-weight: bold;'>{row['FullName']}</div>
+                                <div style='font-size: 1.4rem; font-weight: bold;'>{driver_name}</div>
                                 <div style='font-family: monospace; color: #00cc66;'>{time_str}</div>
                             </div>
                             <div style='font-size: 2rem;'>{['🥇', '🥈', '🥉'][i]}</div>
@@ -109,11 +103,9 @@ def render():
         with col_win:
             with st.container(border=True):
                 st.markdown(f"<div style='display: flex; justify-content: space-between; align-items: flex-start;'><div><div style='color: #888; font-size: 0.85rem; font-weight: bold; letter-spacing: 1px;'>RACE WINNER</div><div style='font-size: 1.6rem; font-weight: bold; margin-top: 5px;'>{highlights['winner']}</div><div style='font-size: 1.1rem; margin-top: 2px; visibility: hidden;'>&nbsp;</div></div><div style='font-size: 2.2rem; opacity: 0.9;'>🏆</div></div>", unsafe_allow_html=True)
-                
         with col_pole:
             with st.container(border=True):
                 st.markdown(f"<div style='display: flex; justify-content: space-between; align-items: flex-start;'><div><div style='color: #888; font-size: 0.85rem; font-weight: bold; letter-spacing: 1px;'>POLE POSITION</div><div style='font-size: 1.6rem; font-weight: bold; margin-top: 5px;'>{highlights['pole']}</div><div style='font-size: 1.1rem; margin-top: 2px; visibility: hidden;'>&nbsp;</div></div><div style='font-size: 2.2rem; opacity: 0.9;'>⏱️</div></div>", unsafe_allow_html=True)
-                
         with col_fast:
             with st.container(border=True):
                 time_html = f"<div style='font-size: 1.1rem; color: white; margin-top: 2px; font-family: monospace;'>{highlights['fastest_lap_time']}</div>" if highlights['fastest_lap_time'] else "<div style='font-size: 1.1rem; margin-top: 2px; visibility: hidden;'>&nbsp;</div>"
@@ -121,19 +113,17 @@ def render():
 
     st.divider()
 
-    # --- PHÂN NHÁNH GIAO DIỆN TABS ---
+    # --- PHÂN NHÁNH TABS ---
     if session_code.startswith('FP'):
-        # TABS CHO PHIÊN THỬ NGHIỆM (PRACTICE)
-        tab_res, tab_strat, tab_laps, tab_dom, tab_rc, tab_tel, tab_fake1, tab_fake2 = st.tabs([
+        tab_res, tab_strat, tab_laps, tab_dom, tab_rc, tab_tel = st.tabs([
             "📊 Results", "⏱️ Strategy", "⏱️ Lap Times", 
-            "🗺️ Track Dominance", "🚨 Race Control", "📉 Telemetry", 
-            "🧪 Setup Analysis (Beta)", "📈 Tyre Deg Predictor"
+            "🗺️ Track Dominance", "🚨 Race Control", "📉 Telemetry"
         ])
         
         with tab_res:
-            fragment_results(session, session_code, selected_session_name)
+            fragment_practice_results(session, selected_session_name)
         with tab_strat:
-            fragment_strategy(session)
+            fragment_practice_strategy(session)
         with tab_laps: 
             fragment_lap_times(session, drivers)
         with tab_dom: 
@@ -147,13 +137,9 @@ def render():
                 st.info("No messages recorded.")
         with tab_tel:
             render_telemetry_tab(session, drivers)
-        with tab_fake1:
-            st.info("🚧 Tính năng 'Setup Analysis' đang được phát triển. Sắp tới tab này sẽ hiển thị so sánh High-Downforce vs Low-Drag setup dựa trên dữ liệu Speed Trap của phiên tập luyện.")
-        with tab_fake2:
-            st.info("🚧 Tính năng 'Tyre Deg Predictor' đang được phát triển. Tương lai sẽ sử dụng mô hình Machine Learning từ ml_core để dự đoán độ mòn lốp dựa trên long-run pace.")
 
     else:
-        # TABS CHO PHIÊN ĐUA / PHÂN HẠNG (RACE / QUALIFYING)
+        # RACE / QUALIFYING / SPRINT
         tab_res, tab_pos, tab_strat, tab_laps, tab_dom, tab_tel, tab_predict, tab_replay = st.tabs([
             "📊 Results", "📈 Positions", "⏱️ Strategy", "⏱️ Lap Times", 
             "🗺️ Track Dominance", "📉 Telemetry", "✨ Race Predictor", "🎥 Replay"
@@ -176,5 +162,4 @@ def render():
         with tab_replay:
             fragment_replay_continuous(session, year, round_num, session_code)
 
-# Gọi hàm render khi file được chạy
 render()
