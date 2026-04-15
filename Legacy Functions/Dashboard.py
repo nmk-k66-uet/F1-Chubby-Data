@@ -793,7 +793,7 @@ def page_details_ui():
                     with cols[j]: fragment_telemetry_card(session, drivers, charts[idx], idx)
 
         # ==========================================
-        # Race Predictor Tab (Cập nhật tương thích với MLCore mới)
+        # Race Predictor Tab
         # ==========================================
         with tab_predict:
             st.subheader("Pre-Race Podium Probability Predictor")
@@ -804,7 +804,7 @@ def page_details_ui():
                 st.session_state.pop('setup_profiler_fig', None)
                 st.session_state.pop('gemini_insight', None)
             
-            # Đọc Gemini API Key từ file
+            # Read Gemini API key from file
             gemini_key = ""
             key_file_path = "assets/gemini_key.txt"
             if os.path.exists(key_file_path):
@@ -819,7 +819,6 @@ def page_details_ui():
             with col_btn1:
                 run_ai = st.button("Generate Predictions & Analysis", type="primary", use_container_width=True)
             with col_btn2:
-                # Gọi hàm từ MLCore để train lại nếu cần
                 retrain_ai = st.button("Retrain Model (If fresh data exists)", use_container_width=True)
                 
             if retrain_ai:
@@ -831,14 +830,14 @@ def page_details_ui():
                 with st.spinner("Running simulations and generating technical insights..."):
                     try:
                         # 1. Gọi Module 1 từ MLCore
-                        model = ml_core.initialize_model(force_retrain=False) 
-                        inference_df = ml_core.prepare_race_features(year, round_num) 
-                        preds_df = ml_core.predict_podium_probabilities(model, inference_df) 
+                        model = MLCore.initialize_model(force_retrain=False) 
+                        inference_df = MLCore.prepare_race_features(year, round_num) 
+                        preds_df = MLCore.predict_podium_probabilities(model, inference_df) 
                         
                         st.session_state['predictions_df'] = preds_df
                         st.session_state['predictions_race_id'] = current_race_id
                         
-                        # 2. Xây dựng Setup Profiler (Top Speed vs Average Speed)
+                        # 2. Building the Setup Profiler (Downforce vs Drag) using telemetry from the fastest lap of each driver in the session
                         setup_data = []
                         for _, row in preds_df.head(10).iterrows():
                             drv = row['Driver']
@@ -894,11 +893,11 @@ def page_details_ui():
                             )
                             st.session_state['setup_profiler_fig'] = fig_setup
                         
-                        # 3. Prompt Gemini chuyên sâu về kỹ thuật
+                        # 3. Prompt Gemini
                         if gemini_client:
                             prompt_data = preds_df.head(10)[['Driver', 'FullName', 'GridPosition', 'Podium_Probability', 'QualifyingDelta', 'FP2_PaceDelta']].to_string(index=False)
                             prompt = f"""
-                            You are a world-class F1 Chief Race Engineer.
+                            You are an F1 Chief Race Engineer.
                             Analyze the following race simulation data for the {event_name} {year}. 
                             Do NOT mention AI or Machine Learning. Treat these values as internal engineering simulations.
 
@@ -910,7 +909,7 @@ def page_details_ui():
                             - Use clear bold headings and bullet points for readability.
                             - Focus on:
                                 * Primary Contenders: Analyze favorites based on Qualifying Delta and simulation probabilities.
-                                * Tactical 'Dark Horse': Identify a driver outside the Top 4 with strong long-run pace (FP2_PaceDelta) likely to challenge the podium.
+                                * Tactical 'Dark Horse': Identify a driver outside the Top 3 with strong long-run pace (FP2_PaceDelta) likely to challenge the podium.
                                 * Strategic Implications: Impact of track position vs. race pace on pit window decisions.
                             - Tone: Strictly data-driven, precise, and professional.
                             """
@@ -925,7 +924,7 @@ def page_details_ui():
                     except Exception as e:
                         st.error(f"Analysis error: {str(e)}")
 
-            # --- HIỂN THỊ KẾT QUẢ ---
+            # --- Display Predictions ---
             if 'predictions_df' in st.session_state:
                 predictions_df = st.session_state['predictions_df']
                 st.divider()
@@ -934,7 +933,6 @@ def page_details_ui():
                 col_chart, col_setup = st.columns([1.2, 1])
                 
                 with col_chart:
-                    # Sắp xếp tăng dần (True) để Plotly vẽ giá trị cao nhất lên ĐẦU trục Y
                     top_10_df = predictions_df.head(10).sort_values('Podium_Probability', ascending=True)
                     fig_pred = px.bar(
                         top_10_df, 
@@ -968,7 +966,6 @@ def page_details_ui():
                 st.divider()
                 st.markdown("### Tactical Analysis Assistant")
                 if 'gemini_insight' in st.session_state:
-                    # Hiển thị trực tiếp kết quả Markdown để giữ bullet points
                     st.markdown(st.session_state['gemini_insight'])
 
         # ==========================================
