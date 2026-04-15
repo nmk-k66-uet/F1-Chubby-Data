@@ -14,7 +14,7 @@ from google import genai
 import streamlit.components.v1 as components 
 
 # IMPORT LÕI MACHINE LEARNING
-import MLCore
+import core.ml_core as ml_core
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="F1 Pulse Interactive Dashboard", layout="wide", page_icon="🏎️")
@@ -367,6 +367,12 @@ def fragment_telemetry_card(session, drivers, chart_info, idx):
 
 # ==========================================
 # LAZY-LOADED REPLAY ENGINE (NATIVE JS)
+# Tích hợp Track Zones (DRS, Straights, Start/Finish, Corners Vector)
+# ==========================================
+# ==========================================
+# LAZY-LOADED REPLAY ENGINE (NATIVE JS)
+# Tích hợp Track Zones (DRS, Straights, Start/Finish, Corners Vector)
+# Đã fix lỗi UX Thanh tiến trình (Progress Bar)
 # ==========================================
 def generate_and_cache_replay_payload(session, max_lap_avail, cache_path):
     st.info("Extracting data... This usually takes 1-2 minutes. Please do not switch tabs.")
@@ -375,6 +381,7 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path):
     
     payload = {
         "frames": [], "laps_info": {}, "messages": [], "colors": {}, "track_path": [], 
+        "corners": [],
         "max_lap": max_lap_avail, "min_x": 0, "max_x": 1, "min_y": 0, "max_y": 1
     }
     
@@ -384,46 +391,78 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path):
         payload["colors"][drv] = f"#{info['TeamColor']}" if str(info['TeamColor']) != 'nan' else '#FFFFFF'
         
     try:
-        ref_tel = session.laps.pick_fastest().get_telemetry()
+        status_text.text("Phase 1/4: Extracting Track Geometry...")
+        
+        # Lấy quỹ đạo đường đua
+        ref_lap = session.laps.pick_fastest()
+        ref_tel = ref_lap.get_telemetry()
         payload["track_path"] = ref_tel[['X', 'Y']].dropna().values.tolist()
         payload["min_x"], payload["max_x"] = float(ref_tel['X'].min()), float(ref_tel['X'].max())
         payload["min_y"], payload["max_y"] = float(ref_tel['Y'].min()), float(ref_tel['Y'].max())
-    except: pass
+        
+        # Lấy vạch Finish (Luôn là điểm đầu của flying lap)
+        payload["finish_line"] = [float(ref_tel['X'].iloc[0]), float(ref_tel['Y'].iloc[0])]
+        
+        # Lấy vạch Start (Vị trí Grid ở Lap 1)
+        try:
+            lap1 = session.laps[session.laps['LapNumber'] == 1].iloc[0]
+            lap1_tel = lap1.get_telemetry()
+            payload["start_line"] = [float(lap1_tel['X'].iloc[0]), float(lap1_tel['Y'].iloc[0])]
+        except: pass
+
+        # Tính toán Góc Cua (Corners Vector)
+        circuit_info = session.get_circuit_info()
+        corners_data = []
+        if circuit_info is not None and hasattr(circuit_info, 'corners'):
+            center_x = (payload["min_x"] + payload["max_x"]) / 2
+            center_y = (payload["min_y"] + payload["max_y"]) / 2
+            
+            for _, row in circuit_info.corners.iterrows():
+                cx = float(row['X']); cy = float(row['Y'])
+                vx = cx - center_x; vy = cy - center_y
+                mag = (vx**2 + vy**2)**0.5
+                if mag == 0: mag = 1
+                corners_data.append({
+                    "x": cx, "y": cy, "nx": vx/mag, "ny": vy/mag, "number": str(row.get('Number', ''))
+                })
+        payload["corners"] = corners_data
+        
+    except Exception as e: 
+        print(f"Error parsing track geometry: {e}")
+        pass
+
+    progress_bar.progress(0.1)
     
     rcm_df = session.race_control_messages
     if not rcm_df.empty:
         for _, row in rcm_df.iterrows():
             t_val = row.get('Time')
-            if pd.isna(t_val):
-                continue
-                
+            if pd.isna(t_val): continue
             try:
-                if hasattr(t_val, 'total_seconds'): # Nó là Timedelta
+                if hasattr(t_val, 'total_seconds'):
                     t_sec = t_val.total_seconds()
                     time_str = f"T+{int(t_sec//60):02d}:{int(t_sec%60):02d}"
-                else: # Nó là Datetime (Timestamp)
+                else:
                     if hasattr(session, 't0_date') and session.t0_date is not None:
                         t_val_no_tz = t_val.tz_localize(None) if t_val.tzinfo else t_val
                         t0_no_tz = session.t0_date.tz_localize(None) if session.t0_date.tzinfo else session.t0_date
                         t_sec = (t_val_no_tz - t0_no_tz).total_seconds()
-                    else: 
-                        t_sec = 0
+                    else: t_sec = 0
                     time_str = t_val.strftime("%H:%M:%S")
-                    
                 flag_str = str(row['Flag']) if 'Flag' in row and pd.notna(row['Flag']) else "INFO"
-                
                 payload["messages"].append({
                     "t_sec": float(t_sec), "time_str": time_str,
                     "flag": flag_str, "msg": str(row.get('Message', ''))
                 })
-            except Exception as e:
-                pass
+            except Exception as e: pass
             
-    status_text.text("Extracting Live Timing data for all laps...")
     for lap in range(1, max_lap_avail + 1):
+        status_text.text(f"Phase 2/4: Extracting Live Timing (Lap {lap}/{max_lap_avail})...")
+        current_prog = 0.1 + 0.4 * (lap / max_lap_avail)
+        progress_bar.progress(current_prog)
+        
         laps_data = session.laps[session.laps['LapNumber'] == lap]
         if laps_data.empty: continue
-        
         timing_data = []
         leader_time = None
         sorted_laps = laps_data.dropna(subset=['Position']).sort_values('Position')
@@ -441,19 +480,21 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path):
             if pd.notna(row['LapTime']):
                 lt_sec = row['LapTime'].total_seconds()
                 lt_str = f"{int(lt_sec // 60)}:{lt_sec % 60:06.3f}"
-                
             timing_data.append({"pos": pos, "drv": drv, "gap": gap, "last_lap": lt_str, "tyre": row.get('Compound', 'Unknown')})
         
         end_t = leader_time.total_seconds() if pd.notna(leader_time) else session.laps['Time'].max().total_seconds()
         payload["laps_info"][str(lap)] = {"timing": timing_data, "end_t_sec": float(end_t)}
 
-    status_text.text("Interpolating car trajectories (Continuous Timeline)...")
     min_time = session.laps['LapStartTime'].dropna().min()
     max_time = session.laps['Time'].dropna().max()
     timestamps = pd.timedelta_range(start=min_time, end=max_time, freq='100ms')
     
     df_list = []
     for i, drv in enumerate(drivers):
+        status_text.text(f"Phase 3/4: Interpolating car trajectories ({i+1}/{len(drivers)})...")
+        current_prog = 0.5 + 0.4 * ((i + 1) / len(drivers))
+        progress_bar.progress(current_prog)
+        
         try:
             drv_laps = session.laps.pick_drivers(drv)
             if not drv_laps.empty:
@@ -468,9 +509,8 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path):
                     tel_synced['Driver'] = drv
                     df_list.append(tel_synced)
         except: pass
-        progress_bar.progress((i + 1) / len(drivers))
         
-    status_text.text("Packaging Animation Frames & Saving to Local Cache...")
+    status_text.text("Phase 4/4: Packaging Animation Frames & Saving...")
     if df_list:
         map_df = pd.concat(df_list, ignore_index=True).sort_values('SessionTime').fillna(0)
         for t_val, group in map_df.groupby('SessionTime'):
@@ -485,6 +525,7 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path):
     st.session_state['js_payload'] = payload
     st.session_state['replay_session_id'] = cache_path
     
+    progress_bar.progress(1.0)
     status_text.success("✅ All data generated and cached successfully! Starting Replay...")
     time.sleep(1)
     status_text.empty()
@@ -493,7 +534,6 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path):
 @st.fragment
 def fragment_replay_continuous(session, year, round_num, session_code):
     st.subheader("Full Session Continuous")
-    
     max_lap_avail = int(session.laps['LapNumber'].max()) if not session.laps.empty else 0
     if max_lap_avail == 0:
         st.warning("No lap data available for this session.")
@@ -517,283 +557,17 @@ def fragment_replay_continuous(session, year, round_num, session_code):
 
     if 'js_payload' in st.session_state:
         payload_json = json.dumps(st.session_state['js_payload'])
+        template_path = 'components/ReplayEngine.html'
         
-        html_code = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                body {{ background-color: rgba(0,0,0,0); color: #fff; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; overflow: hidden; }}
-                .container {{ display: flex; flex-direction: column; height: 1000px; background: #0e1117; border-radius: 8px; border: 1px solid #333; }}
+        try:
+            with open(template_path, 'r', encoding='utf-8') as f:
+                html_template = f.read()
                 
-                .map-row {{ flex: 2; display: flex; flex-direction: column; background: #000; border-bottom: 1px solid #333; min-height: 600px; }}
-                .canvas-wrapper {{ flex: 1; position: relative; min-height: 0; }}
-                canvas {{ display: block; width: 100%; height: 100%; }}
-                
-                .controls {{ background: rgba(15,15,15,1); padding: 12px 20px; display: flex; align-items: center; gap: 20px; border-top: 1px solid #333; }}
-                button {{ background: #ff4b4b; color: white; border: none; padding: 8px 18px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 15px; min-width: 100px; transition: 0.2s;}}
-                button:hover {{ background: #ff3333; }}
-                input[type=range] {{ flex: 1; cursor: pointer; accent-color: #ff4b4b; }}
-                .lap-badge {{ position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.8); padding: 10px 20px; border-radius: 6px; font-size: 22px; font-weight: bold; color: #ff4b4b; border: 1px solid #333; z-index: 10;}}
-                
-                .speed-control {{ display: flex; align-items: center; gap: 8px; color: #ccc; font-weight: bold; font-size: 14px; }}
-                .speed-control select {{ background: #222; color: #fff; border: 1px solid #555; padding: 6px 10px; border-radius: 4px; cursor: pointer; outline: none; font-weight: bold; }}
-                
-                .data-row {{ display: flex; height: 400px; background: #0e1117; }}
-                .timing-col {{ flex: 6; overflow-y: auto; border-right: 1px solid #333; padding-right: 5px; }}
-                
-                .msg-col {{ flex: 4; overflow-y: auto; background: #11141a; position: relative; }}
-                
-                table {{ width: 100%; border-collapse: collapse; font-size: 13.5px; }}
-                thead {{ position: sticky; top: 0; background: #1a1c23; z-index: 10; box-shadow: 0 2px 4px rgba(0,0,0,0.6); }}
-                th {{ padding: 12px; color: #aaa; text-transform: uppercase; text-align: left; }}
-                td {{ padding: 10px 12px; border-bottom: 1px solid #222; }}
-                tr:hover {{ background: rgba(255,255,255,0.05); }}
-                
-                .msg-header {{ 
-                    color: #888; font-size: 13px; font-weight: bold; 
-                    padding: 15px 15px 10px 15px; margin: 0; 
-                    text-transform: uppercase; border-bottom: 1px solid #333; 
-                    position: sticky; top: 0; background: #11141a; z-index: 5; 
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.4); 
-                }}
-                #msgBoard {{ padding: 10px 15px 15px 15px; }}
-                
-                .msg-item {{ margin-bottom: 6px; font-size: 13px; padding: 8px 10px; border-radius: 4px; border-left: 4px solid #444; line-height: 1.4; }}
-                .msg-Yellow {{ background: rgba(255, 255, 0, 0.1); border-left-color: yellow; }}
-                .msg-Red {{ background: rgba(255, 0, 0, 0.1); border-left-color: red; }}
-                .msg-Green {{ background: rgba(0, 255, 0, 0.1); border-left-color: #00cc66; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="map-row">
-                    <div class="canvas-wrapper">
-                        <canvas id="trackCanvas"></canvas>
-                        <div class="lap-badge" id="lapBadge">LAP 1</div>
-                    </div>
-                    <div class="controls">
-                        <button id="playBtn">▶ Play</button>
-                        <input type="range" id="progressSlider" min="0" max="100" value="0" step="1">
-                        <div class="speed-control">
-                            Speed: 
-                            <select id="speedSelect">
-                                <option value="0.25">0.25x</option>
-                                <option value="0.5">0.5x</option>
-                                <option value="1" selected>1.0x</option>
-                                <option value="2">2.0x</option>
-                                <option value="5">5.0x</option>
-                            </select>
-                        </div>
-                    </div>
-                </div>
-                <div class="data-row">
-                    <div class="timing-col">
-                        <table>
-                            <thead><tr><th>P</th><th>Driver</th><th>Gap to Leader</th><th>Last Lap</th><th>Tyre</th></tr></thead>
-                            <tbody id="timing-body"></tbody>
-                        </table>
-                    </div>
-                    <div class="msg-col">
-                        <div class="msg-header">Race Control Messages</div>
-                        <div id="msgBoard"></div>
-                    </div>
-                </div>
-            </div>
-
-            <script>
-                const payload = {payload_json};
-                const canvas = document.getElementById('trackCanvas');
-                const ctx = canvas.getContext('2d');
-                const playBtn = document.getElementById('playBtn');
-                const slider = document.getElementById('progressSlider');
-                const speedSelect = document.getElementById('speedSelect');
-                const lapBadge = document.getElementById('lapBadge');
-                
-                let currentFrameIdx = 0;
-                let currentLap = 0;
-                let isPlaying = false;
-                let speedMultiplier = 1.0;
-                
-                if (payload.frames && payload.frames.length > 0) {{
-                    slider.max = payload.frames.length - 1;
-                }}
-                
-                speedSelect.addEventListener('change', (e) => {{
-                    speedMultiplier = parseFloat(e.target.value);
-                }});
-                
-                let scale = 1, offsetX = 0, offsetY = 0;
-                function resizeCanvas() {{
-                    canvas.width = canvas.parentElement.clientWidth;
-                    canvas.height = canvas.parentElement.clientHeight;
-                    const padding = 40;
-                    const cw = canvas.width - padding * 2;
-                    const ch = canvas.height - padding * 2;
-                    const tw = payload.max_x - payload.min_x;
-                    const th = payload.max_y - payload.min_y;
-                    if(tw > 0 && th > 0) {{
-                        scale = Math.min(cw / tw, ch / th);
-                        offsetX = (canvas.width - tw * scale) / 2 - payload.min_x * scale;
-                        offsetY = (canvas.height - th * scale) / 2 - payload.min_y * scale;
-                    }}
-                    drawFullFrame();
-                }}
-                window.addEventListener('resize', resizeCanvas);
-                
-                function getX(x) {{ return x * scale + offsetX; }}
-                function getY(y) {{ return canvas.height - (y * scale + offsetY); }}
-                
-                function drawTrack() {{
-                    if(!payload.track_path || payload.track_path.length === 0) return;
-                    ctx.beginPath();
-                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
-                    ctx.lineWidth = 12;
-                    ctx.lineCap = 'round';
-                    ctx.lineJoin = 'round';
-                    for(let i=0; i<payload.track_path.length; i++) {{
-                        let [x, y] = payload.track_path[i];
-                        if(i===0) ctx.moveTo(getX(x), getY(y));
-                        else ctx.lineTo(getX(x), getY(y));
-                    }}
-                    ctx.stroke();
-                }}
-                
-                function drawCarsExact(cars) {{
-                    for (let drv in cars) {{
-                        let [x, y] = cars[drv];
-                        let cx = getX(x), cy = getY(y);
-                        
-                        ctx.fillStyle = payload.colors[drv] || '#FFF';
-                        ctx.beginPath();
-                        ctx.arc(cx, cy, 5, 0, 2*Math.PI);
-                        ctx.fill();
-                        
-                        ctx.lineWidth = 1.0;
-                        ctx.strokeStyle = '#111';
-                        ctx.stroke();
-                        
-                        ctx.fillStyle = "white";
-                        ctx.font = "bold 11px Arial";
-                        ctx.fillText(drv, cx + 8, cy + 4);
-                    }}
-                }}
-                
-                function syncDataByTime(t_sec) {{
-                    let newLap = 1;
-                    for (let i = 1; i <= payload.max_lap; i++) {{
-                        let lapStr = i.toString();
-                        if (payload.laps_info[lapStr] && t_sec <= payload.laps_info[lapStr].end_t_sec) {{
-                            newLap = i; break;
-                        }}
-                        newLap = i; 
-                    }}
-                    
-                    if (newLap !== currentLap || document.getElementById('timing-body').innerHTML === '') {{
-                        currentLap = newLap;
-                        lapBadge.innerText = "LAP " + currentLap;
-                        
-                        const lapData = payload.laps_info[currentLap.toString()];
-                        if(lapData && lapData.timing) {{
-                            let html = '';
-                            lapData.timing.forEach(row => {{
-                                const color = payload.colors[row.drv] || '#FFF';
-                                html += `<tr>
-                                    <td><b>${{row.pos}}</b></td>
-                                    <td style="color:${{color}}; font-weight:bold;">${{row.drv}}</td>
-                                    <td>${{row.gap}}</td>
-                                    <td style="font-family:monospace;">${{row.last_lap}}</td>
-                                    <td>${{row.tyre}}</td>
-                                </tr>`;
-                            }});
-                            document.getElementById('timing-body').innerHTML = html;
-                        }}
-                    }}
-                    
-                    const validMsgs = payload.messages.filter(m => m.t_sec <= t_sec);
-                    validMsgs.sort((a,b) => b.t_sec - a.t_sec);
-                    const mbody = document.getElementById('msgBoard');
-                    let html = '';
-                    validMsgs.forEach(m => {{
-                        let cls = 'msg-item';
-                        if(m.flag.includes('Yellow') || m.flag.includes('SC')) cls += ' msg-Yellow';
-                        else if(m.flag.includes('Red')) cls += ' msg-Red';
-                        else if(m.flag.includes('Green') || m.flag.includes('Clear')) cls += ' msg-Green';
-                        html += `<div class="${{cls}}"><span class="msg-time">${{m.time_str}}</span> | ${{m.flag}} - ${{m.msg}}</div>`;
-                    }});
-                    if(html === '') html = '<div style="color:#666;">No incidents reported yet.</div>';
-                    mbody.innerHTML = html;
-                }}
-                
-                function drawFullFrame() {{
-                    if(payload.frames.length === 0) return;
-                    ctx.clearRect(0, 0, canvas.width, canvas.height);
-                    drawTrack();
-                    
-                    let idx = Math.floor(currentFrameIdx);
-                    if (idx >= payload.frames.length) idx = payload.frames.length - 1;
-                    
-                    const frame = payload.frames[idx];
-                    if(frame) {{
-                        drawCarsExact(frame.cars);
-                        syncDataByTime(frame.t_sec);
-                    }}
-                }}
-                
-                let lastTime = 0;
-                const PYTHON_FRAME_DURATION_MS = 100; 
-                
-                function loop(timestamp) {{
-                    if(isPlaying) {{
-                        if (!lastTime) lastTime = timestamp;
-                        let dt = timestamp - lastTime;
-                        lastTime = timestamp;
-                        
-                        let framesToAdvance = (dt * speedMultiplier) / PYTHON_FRAME_DURATION_MS;
-                        currentFrameIdx += framesToAdvance;
-                        
-                        if (currentFrameIdx >= payload.frames.length - 1) {{
-                            currentFrameIdx = payload.frames.length - 1;
-                            isPlaying = false;
-                            playBtn.innerText = "▶ Play";
-                        }}
-                        
-                        slider.value = Math.floor(currentFrameIdx);
-                        drawFullFrame();
-                    }} else {{
-                        lastTime = 0;
-                    }}
-                    requestAnimationFrame(loop);
-                }}
-                
-                playBtn.addEventListener('click', () => {{
-                    if(payload.frames.length === 0) return;
-                    isPlaying = !isPlaying;
-                    playBtn.innerText = isPlaying ? "⏸ Pause" : "▶ Play";
-                    if(isPlaying && currentFrameIdx >= payload.frames.length - 1) {{
-                        currentFrameIdx = 0;
-                    }}
-                }});
-                
-                slider.addEventListener('input', (e) => {{
-                    currentFrameIdx = parseInt(e.target.value);
-                    drawFullFrame();
-                }});
-                
-                setTimeout(() => {{
-                    resizeCanvas();
-                    if(payload.frames && payload.frames.length > 0) {{
-                        drawFullFrame();
-                        requestAnimationFrame(loop); 
-                    }}
-                }}, 100);
-            </script>
-        </body>
-        </html>
-        """
-        
-        components.html(html_code, height=1050)
-
+            html_code = html_template.replace('__PAYLOAD_JSON_PLACEHOLDER__', payload_json)
+            components.html(html_code, height=1050, scrolling=True)
+            
+        except FileNotFoundError:
+            st.error(f"⚠️ Không tìm thấy file HTML giao diện tại: {template_path}")
 
 # ==========================================
 # MULTI-PAGE DEFINITIONS
@@ -1050,16 +824,16 @@ def page_details_ui():
                 
             if retrain_ai:
                 with st.spinner("Retraining the model from historical data..."):
-                    MLCore.initialize_model(force_retrain=True)
+                    ml_core.initialize_model(force_retrain=True)
                     st.success("Model retrained successfully!")
                     
             if run_ai:
                 with st.spinner("Running simulations and generating technical insights..."):
                     try:
                         # 1. Gọi Module 1 từ MLCore
-                        model = MLCore.initialize_model(force_retrain=False) 
-                        inference_df = MLCore.prepare_race_features(year, round_num) 
-                        preds_df = MLCore.predict_podium_probabilities(model, inference_df) 
+                        model = ml_core.initialize_model(force_retrain=False) 
+                        inference_df = ml_core.prepare_race_features(year, round_num) 
+                        preds_df = ml_core.predict_podium_probabilities(model, inference_df) 
                         
                         st.session_state['predictions_df'] = preds_df
                         st.session_state['predictions_race_id'] = current_race_id
