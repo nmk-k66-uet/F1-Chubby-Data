@@ -13,6 +13,9 @@ def fragment_positions(session, drivers, session_name):
     """
     sub_chart, sub_rc, sub_analysis = st.tabs(["📈 Position Chart", "🚨 Race Control", "📊 Analysis"])
     
+    if "sel_all_pos" not in st.session_state:
+        st.session_state["sel_all_pos"] = True
+
     # 1. BIỂU ĐỒ VỊ TRÍ
     with sub_chart:
         col_title, col_filter = st.columns([3, 1])
@@ -94,7 +97,11 @@ def fragment_positions(session, drivers, session_name):
                 'Change': change, 
                 'Status': row['Status']
             })
-            
+
+        def toggle_all():
+        # Sử dụng .get() để lấy giá trị an toàn, mặc định là True nếu không tìm thấy
+            master_val = st.session_state.get("sel_all_pos", True)
+               
         def style_change(val): 
             return 'color: #00cc66; font-weight: bold;' if '↑' in str(val) else ('color: #ff4b4b; font-weight: bold;' if '↓' in str(val) else 'color: gray;')
             

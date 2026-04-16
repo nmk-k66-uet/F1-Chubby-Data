@@ -5,255 +5,206 @@ from datetime import datetime
 from core.data_loader import get_schedule, get_race_winner
 from core.config import get_flag_url
 
+# Link ảnh nền mẫu cho các chặng đua (Bạn có thể thay bằng ảnh thật sau)
+TRACK_BGS = {
+    "Bahrain": "https://images.unsplash.com/photo-1541344999736-83eca272f6fc?q=80&w=800&auto=format&fit=crop",
+    "Saudi Arabia": "https://images.unsplash.com/photo-1580273916550-e323be2ae537?q=80&w=800&auto=format&fit=crop",
+    "Australia": "https://images.unsplash.com/photo-1514316454349-750a7fd3da3a?q=80&w=800&auto=format&fit=crop",
+    "Japan": "https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?q=80&w=800&auto=format&fit=crop",
+    "China": "https://images.unsplash.com/photo-1508804185872-d7badad00f7d?q=80&w=800&auto=format&fit=crop",
+    "Default": "https://images.unsplash.com/photo-1532938914619-3549ea5b3406?q=80&w=800&auto=format&fit=crop"
+}
+
 def render():
     st.markdown("""
         <style>
-            [data-testid="stButton"] button {
-                width: 100% !important;        /* QUAN TRỌNG: Ép nút bấm tràn 100% cột */
-                display: block !important;     /* QUAN TRỌNG: Bỏ inline-flex mặc định của Streamlit */
-                height: auto !important;
-                padding: 1rem !important;
-                border-radius: 12px !important;
-                background-color: #16181c !important;
-                border: 1px solid rgba(255, 255, 255, 0.1) !important;
-                transition: all 0.2s ease-in-out !important;
+            /* Reset khoảng cách của Streamlit */
+            .block-container { padding-top: 1rem !important; max-width: 95% !important; }
+            
+            /* --- CSS Tiêu đề mục --- */
+            .sec-header { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 10px; margin-bottom: 15px; }
+            .sec-title { color: #ffffff; font-size: 1.15rem; font-weight: 700; margin: 0; text-transform: uppercase; letter-spacing: 0.5px;}
+            .sec-title span { color: #ff4b4b; }
+            
+            /* --- CSS BẢNG XẾP HẠNG (STANDINGS CARD) --- */
+            .st-card {
+                background-color: #16181c; border: 1px solid rgba(255, 255, 255, 0.05);
+                border-radius: 12px; padding: 18px 20px; display: flex; justify-content: space-between;
+                align-items: center; margin-bottom: 15px; transition: transform 0.2s;
             }
-            [data-testid="stButton"] button:hover {
-                border-color: #ff4b4b !important;
-                background-color: #1e2025 !important;
-                transform: translateY(-4px) !important;
-                box-shadow: 0 8px 24px rgba(255, 75, 75, 0.15) !important;
+            .st-card:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.1); }
+            .st-info { display: flex; flex-direction: column; }
+            .st-name { color: #a0a0a0; font-size: 0.9rem; margin-bottom: 4px; font-weight: bold;}
+            .st-pts { color: #ffffff; font-size: 1.4rem; font-weight: 900; }
+            .st-trend { color: #00cc66; font-size: 0.8rem; margin-top: 2px; font-weight: bold;}
+            .st-logo { font-size: 1.8rem; opacity: 0.8; }
+
+            /* --- CSS THẺ CHẶNG ĐUA (Chỉ áp dụng cho nút Secondary mặc định) --- */
+            [data-testid="stBaseButton-secondary"] {
+                width: 100% !important; display: block !important; height: 125px !important;
+                padding: 0 !important; border-radius: 12px !important; background-color: #000000 !important;
+                border: 1px solid rgba(255, 255, 255, 0.1) !important; position: relative !important; overflow: hidden !important;
+                transition: transform 0.2s, border-color 0.2s !important; margin-bottom: 12px !important;
             }
-            [data-testid="stButton"] button:disabled {
-                opacity: 0.7 !important;
-                transform: none !important;
-                box-shadow: none !important;
-                border-color: rgba(255, 255, 255, 0.05) !important;
-                cursor: not-allowed !important;
+            [data-testid="stBaseButton-secondary"]:hover { border-color: #ff4b4b !important; transform: scale(1.02) !important; box-shadow: 0 4px 15px rgba(255,75,75,0.2) !important;}
+            [data-testid="stBaseButton-secondary"]:disabled { opacity: 0.7; filter: grayscale(70%); cursor: not-allowed !important; transform: none !important; }
+            
+            [data-testid="stBaseButton-secondary"] > div, [data-testid="stBaseButton-secondary"] div[data-testid="stMarkdownContainer"] {
+                width: 100% !important; height: 100% !important; padding: 0 !important; margin: 0 !important; display: block !important;
             }
             
-            /* XÓA PADDING ẨN CỦA STREAMLIT: Ép các div bọc nội dung phải chiếm 100% chiều rộng */
-            [data-testid="stButton"] button > div, 
-            [data-testid="stButton"] button div[data-testid="stMarkdownContainer"] {
-                width: 100% !important;
-                max-width: 100% !important;
-                padding: 0 !important;
-                margin: 0 !important;
+            /* Flex layout đè lên ảnh */
+            [data-testid="stBaseButton-secondary"] p {
+                display: flex !important; flex-direction: column !important; justify-content: center !important;
+                width: 100% !important; height: 100% !important; margin: 0 !important; padding: 15px 20px !important;
+                position: relative !important; z-index: 2 !important; text-align: left !important; align-items: flex-start !important;
             }
+
+            /* Ảnh 1: Hình nền mờ che phủ toàn nút */
+            [data-testid="stBaseButton-secondary"] p img:nth-of-type(1) {
+                position: absolute !important; top: 0 !important; left: 0 !important;
+                width: 100% !important; height: 100% !important; object-fit: cover !important;
+                opacity: 0.3 !important; z-index: -1 !important;
+            }
+            /* Ảnh 2: Cờ quốc gia ở góc phải */
+            [data-testid="stBaseButton-secondary"] p img:nth-of-type(2) {
+                position: absolute !important; right: 20px !important; top: 20px !important;
+                width: 26px !important; border-radius: 4px !important; opacity: 0.9 !important;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.5) !important;
+            }
+
+            /* Chữ trong thẻ chặng đua */
+            [data-testid="stBaseButton-secondary"] p strong { font-size: 1.15rem !important; color: #ffffff !important; margin-bottom: 2px !important; text-shadow: 1px 1px 3px rgba(0,0,0,0.8); }
+            [data-testid="stBaseButton-secondary"] p em { font-size: 0.85rem !important; color: #d0d0d0 !important; font-style: normal !important; margin-bottom: 8px !important; text-shadow: 1px 1px 3px rgba(0,0,0,0.8); }
+            [data-testid="stBaseButton-secondary"] p code { font-size: 0.85rem !important; background: rgba(0,0,0,0.6) !important; padding: 4px 10px !important; border-radius: 4px !important; font-weight: bold !important; font-family: inherit !important; border: 1px solid rgba(255,255,255,0.1); }
             
-            /* Định nghĩa Lưới 2 nửa, 3 cột, nhiều dòng */
-            [data-testid="stButton"] button p {
-                display: grid !important;
-                grid-template-columns: 48px 1fr auto !important;
-                grid-template-rows: auto auto auto auto auto auto !important;
-                grid-template-areas:
-                    "flag event round"
-                    "flag loc round"
-                    "divider divider divider"
-                    "date date status"
-                    "win1 win1 status"
-                    "win2 win2 status" !important;
-                width: 100% !important;
-                max-width: 100% !important;
-                row-gap: 4px !important;
-                column-gap: 8px !important;
-                margin: 0 !important;
-                text-align: left !important;
-                align-items: center !important;
+            /* --- CSS Nút "View All RACES" (Primary Button) --- */
+            [data-testid="stBaseButton-primary"] {
+                background-color: transparent !important; border: 1px solid #ff4b4b !important; color: #ff4b4b !important;
+                border-radius: 20px !important; padding: 0px 15px !important; font-size: 0.85rem !important;
+                height: 32px !important; min-height: 32px !important; font-weight: bold !important;
             }
-            
-            /* 1. Flag (Cột trái nửa trên, chiếm 2 dòng) */
-            [data-testid="stButton"] button p img:nth-of-type(1) {
-                grid-area: flag;
-                width: 36px !important;
-                height: 26px !important;
-                border-radius: 4px !important;
-                object-fit: cover !important;
-                align-self: center !important;
-                justify-self: start !important; /* Căn trái */
-                box-shadow: 0 0 3px rgba(255,255,255,0.2) !important;
-            }
-            /* 2. Event Name (Giữa dòng 1) */
-            [data-testid="stButton"] button p strong:nth-of-type(1) {
-                grid-area: event;
-                font-size: 1.05rem !important;
-                color: #ffffff !important;
-                line-height: 1.2 !important;
-                white-space: nowrap !important;
-                overflow: hidden !important;
-                text-overflow: ellipsis !important;
-                justify-self: start !important; /* Căn trái */
-            }
-            /* 3. Location (Giữa dòng 2) */
-            [data-testid="stButton"] button p em:nth-of-type(1) {
-                grid-area: loc;
-                font-size: 0.85rem !important;
-                color: #a0a0a0 !important;
-                font-style: normal !important;
-                white-space: nowrap !important;
-                overflow: hidden !important;
-                text-overflow: ellipsis !important;
-                justify-self: start !important; /* Căn trái */
-            }
-            /* 4. Round Number (Phải nửa trên, chiếm 2 dòng) */
-            [data-testid="stButton"] button p del:nth-of-type(1) {
-                grid-area: round;
-                font-size: 0.9rem !important;
-                color: #ffffff !important;
-                background-color: rgba(255, 255, 255, 0.1) !important;
-                padding: 4px 10px !important;
-                border-radius: 20px !important;
-                text-decoration: none !important;
-                font-weight: bold !important;
-                align-self: center !important;
-                justify-self: end !important; /* Căn phải */
-            }
-            /* 5. Divider (Đường kẻ ngang) - Dùng negative margin để kéo dài mép tới mép thẻ */
-            [data-testid="stButton"] button p img:nth-of-type(2) {
-                grid-area: divider;
-                width: calc(100% + 2rem) !important;
-                margin: 10px -1rem 8px -1rem !important;
-                height: 1px !important;
-                background-color: rgba(255,255,255,0.15) !important;
-            }
-            /* 6. Date (Trái dòng 1 nửa dưới) */
-            [data-testid="stButton"] button p code:nth-of-type(1) {
-                grid-area: date;
-                font-size: 0.85rem !important;
-                color: #00cc66 !important;
-                background: transparent !important;
-                padding: 0 !important;
-                font-family: inherit !important;
-                font-weight: 600 !important;
-                justify-self: start !important; /* Căn trái */
-            }
-            /* 7. Winner Name / Format Line 1 (Trái dòng 2 nửa dưới) */
-            [data-testid="stButton"] button p strong:nth-of-type(2) {
-                grid-area: win1;
-                font-size: 0.9rem !important;
-                color: #e0e0e0 !important;
-                margin-top: 4px !important;
-                white-space: nowrap !important;
-                overflow: hidden !important;
-                text-overflow: ellipsis !important;
-                justify-self: start !important; /* Căn trái */
-            }
-            /* 8. Winner Team / Format Line 2 (Trái dòng 3 nửa dưới) */
-            [data-testid="stButton"] button p em:nth-of-type(2) {
-                grid-area: win2;
-                font-size: 0.85rem !important;
-                color: #a0a0a0 !important;
-                font-style: normal !important;
-                white-space: nowrap !important;
-                overflow: hidden !important;
-                text-overflow: ellipsis !important;
-                justify-self: start !important; /* Căn trái */
-            }
-            /* 9. Status (Phải nửa dưới, chiếm 3 dòng) */
-            [data-testid="stButton"] button p del:nth-of-type(2) {
-                grid-area: status;
-                font-size: 0.8rem !important;
-                color: #ffffff !important;
-                text-decoration: none !important;
-                font-weight: bold !important;
-                align-self: start !important;
-                justify-self: end !important; /* Căn phải */
-                background: rgba(0,0,0,0.4) !important;
-                padding: 4px 8px !important;
-                border-radius: 6px !important;
-                border: 1px solid rgba(255,255,255,0.1) !important;
-            }
+            [data-testid="stBaseButton-primary"]:hover { background-color: rgba(255, 75, 75, 0.1) !important; }
         </style>
     """, unsafe_allow_html=True)
 
-    col_title, col_sel = st.columns([3, 1])
-    with col_title:
-        st.title("🏎️ F1 Pulse")
-        st.markdown("Explore race schedules, results, and in-depth performance analysis.")
-        
-    with col_sel:
+    # --- PHẦN HEADER ---
+    col_hdr1, col_hdr2 = st.columns([4, 1])
+    with col_hdr1:
+        st.markdown("<h1 style='margin-bottom: 0; padding-bottom: 0;'>Dashboard</h1>", unsafe_allow_html=True)
+        if 'selected_year' not in st.session_state: st.session_state['selected_year'] = 2026
+        st.markdown(f"<p style='color: #888; font-size: 0.95rem; font-weight: bold;'>Season Overview {st.session_state['selected_year']}</p>", unsafe_allow_html=True)
+    
+    with col_hdr2:
         st.markdown("<br>", unsafe_allow_html=True)
-        if 'selected_year' not in st.session_state:
-            st.session_state['selected_year'] = 2026
-            
-        years_list = [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018]
-        selected_year = st.selectbox("📅 Select Season:", years_list, index=years_list.index(st.session_state['selected_year']), label_visibility="collapsed")
+        years_list = [2026, 2025, 2024, 2023, 2022, 2021]
+        selected_year = st.selectbox("Season", years_list, index=years_list.index(st.session_state['selected_year']), label_visibility="collapsed")
         st.session_state['selected_year'] = selected_year
 
-    st.divider()
-    events_df = get_schedule(selected_year)
+    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
-    if not events_df.empty:
-        st.subheader(f"Race Calendar & Results - Season {selected_year}")
-        
-        div_img = "data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="
-        
-        # Vẽ lưới các thẻ sự kiện
-        for i in range(0, len(events_df), 3):
-            cols = st.columns(3)
-            for j in range(3):
-                if i + j < len(events_df):
-                    event = events_df.iloc[i + j]
-                    col = cols[j]
-                    
-                    round_num = event['RoundNumber']
-                    country = str(event['Country'])
-                    flag_url = get_flag_url(country)
-                    
-                    event_name = str(event['EventName']).strip().replace('_', '').replace('*', '').replace('~', '').replace('`', '')
-                    location = str(event.get('Location', country)).strip().replace('_', '').replace('*', '').replace('~', '').replace('`', '')
-                    
-                    now = datetime.now()
-                    event_date = event['EventDate'].tz_localize(None) if pd.notna(event['EventDate']) else None
-                    date_str = "🗓️ " + event_date.strftime("%d %b, %Y") if event_date else "TBA"
-                    
-                    format_type = str(event.get('EventFormat', 'conventional')).capitalize().replace('_', ' ')
-                    if not format_type: format_type = "Conventional"
-                    elif format_type in ['Sprint', 'Sprint qualifying'] : format_type = "Sprint Weekend"
-                    
-                    # Xác định trạng thái
-                    status_text = "⏳ Upcoming"
-                    is_completed = False
-                    
-                    if event_date:
-                        time_diff = (now - event_date).total_seconds()
-                        if time_diff > 10800:
-                            status_text = "🟢 Completed"
-                            is_completed = True
-                            winner_info = get_race_winner(selected_year, round_num)
-                            
-                            if winner_info == "N/A":
-                                status_text = "❌ Cancelled"
-                                is_completed = False
-                                line1 = "Format: " + format_type 
-                            elif "(" in winner_info:
-                                w_name, w_team = winner_info.split(" (")
-                                line1 = f"🏆 {w_name.strip()}"
-                                line2 = f"👥 {w_team.replace(')', '').strip()}"
-                            else:
-                                line1 = f"🏆 {winner_info}"
-                                line2 = "🏎️ N/A"
-                                
-                        elif time_diff > 0: # Nằm trong khoảng 3 tiếng từ lúc xuất phát
-                            status_text = "🔥 Ongoing"
-                            line1 = "Format: " + format_type
+    # --- CHIA LAYOUT CỘT CHÍNH: Tỷ lệ 6.5 vs 3.5 ---
+    col_left, col_right = st.columns([6.5, 3.5], gap="large")
+
+    # ==========================================
+    # CỘT TRÁI: TEAM & DRIVER STANDINGS
+    # ==========================================
+    with col_left:
+        # Dữ liệu tĩnh (Dummy data) dựng theo ảnh UI mẫu
+        teams_data = [
+            {"name": "Mercedes", "pts": "135", "trend": "↑ 37", "icon": "⚝", "color": "#00D2BE"},
+            {"name": "Ferrari", "pts": "90", "trend": "↑ 23", "icon": "🐎", "color": "#DC0000"},
+            {"name": "McLaren", "pts": "46", "trend": "↑ 26", "icon": "⚡", "color": "#FF8700"},
+            {"name": "Haas F1 Team", "pts": "18", "trend": "↑ 1", "icon": "H", "color": "#FFFFFF"}
+        ]
+        drivers_data = [
+            {"name": "Kimi Antonelli", "pts": "72", "trend": "↑ 25", "icon": "👤", "color": "#00D2BE"},
+            {"name": "George Russell", "pts": "63", "trend": "↑ 12", "icon": "👤", "color": "#00D2BE"},
+            {"name": "Charles Leclerc", "pts": "49", "trend": "↑ 15", "icon": "👤", "color": "#DC0000"},
+            {"name": "Lewis Hamilton", "pts": "41", "trend": "↑ 8", "icon": "👤", "color": "#DC0000"}
+        ]
+
+        # 1. TEAM STANDINGS
+        st.markdown("<div class='sec-header'><div class='sec-title'>Team <span>Standings</span></div></div>", unsafe_allow_html=True)
+        for i in range(0, len(teams_data), 2):
+            c1, c2 = st.columns(2)
+            with c1:
+                t1 = teams_data[i]
+                st.markdown(f"<div class='st-card'><div class='st-info'><div class='st-name'>{t1['name']}</div><div class='st-pts'>{t1['pts']} PTS</div><div class='st-trend'>{t1['trend']}</div></div><div class='st-logo' style='color:{t1['color']};'>{t1['icon']}</div></div>", unsafe_allow_html=True)
+            with c2:
+                if i+1 < len(teams_data):
+                    t2 = teams_data[i+1]
+                    st.markdown(f"<div class='st-card'><div class='st-info'><div class='st-name'>{t2['name']}</div><div class='st-pts'>{t2['pts']} PTS</div><div class='st-trend'>{t2['trend']}</div></div><div class='st-logo' style='color:{t2['color']};'>{t2['icon']}</div></div>", unsafe_allow_html=True)
+
+        # 2. DRIVER STANDINGS
+        st.markdown("<div class='sec-header' style='margin-top: 25px;'><div class='sec-title'>Driver <span>Standings</span></div></div>", unsafe_allow_html=True)
+        for i in range(0, len(drivers_data), 2):
+            c1, c2 = st.columns(2)
+            with c1:
+                d1 = drivers_data[i]
+                st.markdown(f"<div class='st-card'><div class='st-info'><div class='st-name'>{d1['name']}</div><div class='st-pts'>{d1['pts']} PTS</div><div class='st-trend'>{d1['trend']}</div></div><div class='st-logo' style='color:{d1['color']};'>{d1['icon']}</div></div>", unsafe_allow_html=True)
+            with c2:
+                if i+1 < len(drivers_data):
+                    d2 = drivers_data[i+1]
+                    st.markdown(f"<div class='st-card'><div class='st-info'><div class='st-name'>{d2['name']}</div><div class='st-pts'>{d2['pts']} PTS</div><div class='st-trend'>{d2['trend']}</div></div><div class='st-logo' style='color:{d2['color']};'>{d2['icon']}</div></div>", unsafe_allow_html=True)
+
+    # ==========================================
+    # CỘT PHẢI: RACE ANALYTICS (Tóm tắt chặng đua)
+    # ==========================================
+    with col_right:
+        c_title, c_link = st.columns([1.5, 1])
+        with c_title: 
+            st.markdown("<div class='sec-header'><div class='sec-title'>Race <span>Analytics</span></div></div>", unsafe_allow_html=True)
+        with c_link:
+            st.write("") 
+            # Sử dụng type="primary" để có giao diện nút viền đỏ "View All"
+            if st.button("View All →", type="primary", use_container_width=True):
+                st.switch_page("pages/race_analytics.py")
+
+        events_df = get_schedule(selected_year)
+        if not events_df.empty:
+            # Chỉ lấy 4 chặng đua (VD: 2 chặng vừa qua, 2 chặng sắp tới) để hiển thị cho gọn
+            for _, event in events_df.head(4).iterrows():
+                round_num = event['RoundNumber']
+                event_name = str(event['EventName']).strip()
+                country = str(event['Country'])
+                
+                flag_url = get_flag_url(country)
+                bg_url = TRACK_BGS.get(country, TRACK_BGS["Default"])
+                
+                event_date = event['EventDate'].tz_localize(None) if pd.notna(event['EventDate']) else None
+                date_str = event_date.strftime("%d %b, %Y") if event_date else "TBA"
+                
+                now = datetime.now()
+                is_completed = False
+                status_code = ""
+                
+                if event_date:
+                    time_diff = (now - event_date).total_seconds()
+                    if time_diff > 10800:
+                        is_completed = True
+                        winner = get_race_winner(selected_year, round_num)
+                        if winner == "N/A":
+                            status_code = "<code style='color:#ff4b4b;'>CANCELLED</code>"
+                            is_completed = False
                         else:
-                            line1 = "Format: " + format_type
+                            winner_name = winner.split(" (")[0] if "(" in winner else winner
+                            status_code = f"<code style='color:#00cc66;'>Winner: {winner_name}</code>"
+                    elif time_diff > 0:
+                        status_code = "<code style='color:#ffaa00;'>LIVE NOW</code>"
                     else:
-                        line1 = "Format: "
-                            
-                    current_flag = flag_url if flag_url else div_img
-                    
-                    if status_text == "⏳ Upcoming":
-                        btn_label = f"![f]({current_flag})__{event_name}__*{location}*~Round {round_num}~![d]({div_img})``{date_str}``__{line1}__~{status_text}~"
-                    else:
-                        btn_label = f"![f]({current_flag})__{event_name}__*{location}*~Round {round_num}~![d]({div_img})``{date_str}``__{line1}__*{line2}*~{status_text}~"
-                    
-                    with col:
-                        if st.button(btn_label, key=f"btn_{selected_year}_{round_num}", use_container_width=True, disabled=not is_completed):
-                            st.session_state['selected_event'] = {'year': selected_year, 'round': round_num, 'name': event_name, 'country': country}
-                            st.switch_page("pages/details.py")
-    else:
-        st.warning("No schedule data found for this season.")
+                        status_code = "<code style='color:#ffffff;'>UPCOMING</code>"
+                else:
+                    status_code = "<code style='color:#ffffff;'>TBA</code>"
+
+                # Cấu trúc: Ảnh Nền -> Ảnh Cờ -> Tên Chặng -> Địa điểm -> Trạng thái
+                btn_label = f"![bg]({bg_url})\n![f]({flag_url})\n__{event_name}__\n*{date_str} - {country}*\n{status_code}"
+
+                # Render nút bấm (Sẽ tự động nhận CSS của stBaseButton-secondary)
+                if st.button(btn_label, key=f"btn_dash_{selected_year}_{round_num}", disabled=not is_completed):
+                    st.session_state['selected_event'] = {'year': selected_year, 'round': round_num, 'name': event_name, 'country': country}
+                    st.switch_page("pages/details.py")
+        else:
+            st.warning("No races found.")
 
 render()
