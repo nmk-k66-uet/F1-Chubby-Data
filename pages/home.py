@@ -189,7 +189,7 @@ def render():
             [data-testid="stBaseButton-secondary"] em { font-size: 0.85rem !important; color: #d0d0d0 !important; font-style: normal !important; margin-bottom: 8px !important; text-shadow: 1px 1px 4px rgba(0,0,0,0.9); }
             
             /* BADGE TRẠNG THÁI: Nền trong suốt, không viền, chữ trắng */
-            [data-testid="stBaseButton-secondary"] del { 
+            [data-testid="stBaseButton-secondary"] p del { 
                 position: relative !important; z-index: 2 !important; display: inline-block !important; width: max-content !important; 
                 font-size: 0.95rem !important; background-color: transparent !important; padding: 0 !important; 
                 font-weight: 800 !important; text-decoration: none !important; border: none !important; box-shadow: none !important; color: #ffffff !important; text-shadow: 1px 1px 4px rgba(0,0,0,0.9);
@@ -224,8 +224,18 @@ def render():
         teams_data = api_teams if api_teams else []
         drivers_data = api_drivers if api_drivers else []
 
-        # 1. TEAM STANDINGS
-        st.markdown("<div class='sec-header'><div class='sec-title'>Constructor <span>Standings</span></div></div>", unsafe_allow_html=True)
+        # 1. TEAM STANDINGS VÀ NÚT FULL STANDINGS
+        col_t_title, col_t_btn = st.columns([3, 1.2])
+        with col_t_title:
+            st.markdown("<div class='sec-header'><div class='sec-title'>Constructor <span>Standings</span></div></div>", unsafe_allow_html=True)
+        with col_t_btn:
+            st.write("")
+            if st.button("Full Standings →", key="btn_full_team", type="primary", use_container_width=True):
+                try:
+                    st.switch_page("pages/constructors.py")
+                except Exception:
+                    st.toast("Trang Constructors đang được xây dựng!", icon="🚧")
+                    
         if not teams_data:
             st.info("Chưa có dữ liệu cho mùa giải này.")
         else:
@@ -239,8 +249,18 @@ def render():
                         t2 = teams_data[i+1]
                         st.markdown(f"<div class='st-card'><div class='st-info'><div class='st-name'>{t2['name']}</div><div class='st-pts'>{t2['pts']} PTS</div><div class='st-trend'>{t2['trend']}</div></div>{t2['logo_html']}</div>", unsafe_allow_html=True)
 
-        # 2. DRIVER STANDINGS
-        st.markdown("<div class='sec-header' style='margin-top: 25px;'><div class='sec-title'>Driver <span>Standings</span></div></div>", unsafe_allow_html=True)
+        # 2. DRIVER STANDINGS VÀ NÚT FULL STANDINGS
+        col_d_title, col_d_btn = st.columns([3, 1.2])
+        with col_d_title:
+            st.markdown("<div class='sec-header' style='margin-top: 25px;'><div class='sec-title'>Driver <span>Standings</span></div></div>", unsafe_allow_html=True)
+        with col_d_btn:
+            st.markdown("<div style='margin-top: 25px;'></div>", unsafe_allow_html=True)
+            if st.button("Full Standings →", key="btn_full_driver", type="primary", use_container_width=True):
+                try:
+                    st.switch_page("pages/drivers.py")
+                except Exception:
+                    st.toast("Trang Drivers đang được xây dựng!", icon="🚧")
+                    
         if not drivers_data:
             st.info("Chưa có dữ liệu cho mùa giải này.")
         else:
@@ -270,8 +290,7 @@ def render():
                 event_name = str(event['EventName']).strip()
                 country = str(event['Country'])
                 
-                # THÊM FALLBACK LẤY TÊN THEO EVENT_NAME HOẶC QUỐC GIA ĐỂ TRÁNH TRẢ VỀ NONE
-                raw_bg_path = TRACK_BGS.get(event_name, TRACK_BGS.get(country, TRACK_BGS.get("Default")))
+                raw_bg_path = TRACK_BGS.get(event_name)
                 bg_url = load_bg_image(raw_bg_path)
                 
                 event_date = event['EventDate'].tz_localize(None) if pd.notna(event['EventDate']) else None
@@ -291,7 +310,6 @@ def render():
                             is_completed = False
                         else:
                             winner_name = winner.split(" (")[0] if "(" in winner else winner
-                            # Giữ nguyên định dạng Winner màu trắng của bạn
                             status_code = f"~Winner: {winner_name}~"
                     elif time_diff > 0:
                         status_code = "~:orange[LIVE NOW]~"
