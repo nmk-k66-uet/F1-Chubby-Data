@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from components.tab_race_control import fragment_race_control
 
 @st.fragment
 def fragment_positions(session, drivers, session_name):
@@ -73,14 +74,7 @@ def fragment_positions(session, drivers, session_name):
 
     # 2. BẢNG RACE CONTROL
     with sub_rc:
-        st.subheader("FIA Race Control Timeline")
-        rcm_df = session.race_control_messages
-        if not rcm_df.empty:
-            rcm_display = rcm_df[['Time', 'Category', 'Flag', 'Message']].copy()
-            rcm_display['Time'] = rcm_display['Time'].apply(lambda ts: ts.strftime("%H:%M:%S") if pd.notna(ts) else "")
-            st.dataframe(rcm_display, width='stretch', hide_index=True)
-        else:
-            st.info("No race control messages for this session.")
+        fragment_race_control(session)
 
     # 3. PHÂN TÍCH VỊ TRÍ (GAINED/LOST)
     with sub_analysis:

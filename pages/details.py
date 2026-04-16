@@ -14,6 +14,7 @@ from components.tab_track_dominance import fragment_dominance
 from components.tab_telemetry import render_telemetry_tab
 from components.predictor_ui import render_predictor_tab
 from components.replay_engine import fragment_replay_continuous
+from components.tab_race_control import fragment_race_control
 
 def render():
     if not st.session_state.get('selected_event'):
@@ -71,12 +72,10 @@ def render():
 
     st.markdown("""
         <style>
-            /* Ép thẻ chứa danh sách tab trải dài 100% */
             .stTabs [data-baseweb="tab-list"] {
                 display: flex;
                 width: 100%;
             }
-            /* Ép từng tab chia đều không gian và căn giữa chữ */
             .stTabs [data-baseweb="tab"] {
                 flex-grow: 1;
                 justify-content: center;
@@ -147,12 +146,7 @@ def render():
         with tab_dom: 
             fragment_dominance(session, drivers)
         with tab_rc:
-            st.subheader("Race Control Messages")
-            rcm_df = session.race_control_messages
-            if not rcm_df.empty:
-                st.dataframe(rcm_df[['Time', 'Category', 'Message']], width='stretch', hide_index=True)
-            else:
-                st.info("No messages recorded.")
+            fragment_race_control(session)
         with tab_tel:
             render_telemetry_tab(session, drivers)
 
