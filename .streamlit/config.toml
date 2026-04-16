@@ -16,3 +16,6 @@ primaryColor="#E10600"
 
 [server]
 runOnSave = true
+
+[client]
+toolbarMode = "minimal"

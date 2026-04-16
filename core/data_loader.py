@@ -3,14 +3,15 @@ import fastf1
 import pandas as pd
 import os
 
-CACHE_DIR = '../f1_cache'
+# --- Thiết lập Cache cho FastF1 ---
+CACHE_DIR = 'f1_cache'
 if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR)
 
 fastf1.Cache.enable_cache(CACHE_DIR)
 fastf1.set_log_level('ERROR')
 
-# --- DATA LOADING FUNCTIONS ---
+# --- Các hàm Tải Dữ liệu ---
 @st.cache_data(show_spinner=False)
 def get_schedule(year):
     try:
@@ -18,14 +19,15 @@ def get_schedule(year):
         return schedule[schedule['RoundNumber'] > 0]
     except:
         return pd.DataFrame()
-    
+
 @st.cache_data(show_spinner=False)
 def get_race_winner(year, round_num):
     try:
         session = fastf1.get_session(year, round_num, 'R')
         session.load(telemetry=False, weather=False, messages=False)
         winner = session.results.iloc[0]
-        return f"{winner['Abbreviation']} ({winner['TeamName']})"
+        # Đổi Abbreviation thành FullName
+        return f"{winner['FullName']} ({winner['TeamName']})"
     except:
         return "N/A"
 
@@ -38,7 +40,7 @@ def load_f1_session(year, round_num, session_type):
     except Exception as e:
         st.error(f"Error loading session data: {e}")
         return None
-    
+
 @st.cache_data(show_spinner=False)
 def get_event_highlights(year, round_num):
     highlights = {"winner": "N/A", "pole": "N/A", "fastest_lap_driver": "N/A", "fastest_lap_time": ""}
