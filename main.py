@@ -12,11 +12,12 @@ setup_page_config()
 render_navbar()
 
 # 3. Khai báo danh sách các trang trong ứng dụng
-page_home = st.Page("pages/home.py", title="Dashboard", icon="🏠", default=True)
-page_race_analytics = st.Page("pages/race_analytics.py", title="Race Analytics", icon="📅")
-page_details = st.Page("pages/details.py", title="Race Analysis", icon="🏎️")
-page_drivers = st.Page("pages/drivers.py", title="Drivers", icon="👤")
+page_home = st.Page("pages/home.py", title="Dashboard", default=True)
+page_race_analytics = st.Page("pages/race_analytics.py", title="Race Analytics")
+page_details = st.Page("pages/details.py", title="Race Analysis")
+page_drivers = st.Page("pages/drivers.py", title="Drivers")
+page_constructors = st.Page("pages/constructors.py", title="Constructors")
 
 # 4. Chạy hệ thống điều hướng (ẩn menu mặc định bên trái)
-pg = st.navigation([page_home, page_drivers, page_race_analytics, page_details], position="hidden")
+pg = st.navigation([page_home, page_drivers, page_constructors, page_race_analytics, page_details], position="hidden")
 pg.run()

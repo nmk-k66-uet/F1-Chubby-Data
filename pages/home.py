@@ -4,11 +4,9 @@ import base64
 import os
 import requests
 from datetime import datetime
-
 from core.data_loader import get_schedule, get_race_winner
 from core.config import get_flag_url
 
-# Đã thay đổi đường dẫn sang Local folder (assets/BGS/...) và giữ nguyên thiết lập của bạn
 TRACK_BGS = {
     "Bahrain Grand Prix": "assets/BGS/Bahrain Grand Prix.avif",
     "Saudi Arabian Grand Prix": "assets/BGS/Saudi Arabian Grand Prix.avif",
