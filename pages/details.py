@@ -69,6 +69,24 @@ def render():
 
     drivers = session.results['Abbreviation'].dropna().unique().tolist()
 
+    st.markdown("""
+        <style>
+            /* Ép thẻ chứa danh sách tab trải dài 100% */
+            .stTabs [data-baseweb="tab-list"] {
+                display: flex;
+                width: 100%;
+            }
+            /* Ép từng tab chia đều không gian và căn giữa chữ */
+            .stTabs [data-baseweb="tab"] {
+                flex-grow: 1;
+                justify-content: center;
+                white-space: nowrap;
+                padding-left: 0px;
+                padding-right: 0px;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
     # --- PHÂN NHÁNH HIGHLIGHTS ---
     if session_code.startswith('FP'):
         st.subheader(f"Session Highlights - {selected_session_name}")
