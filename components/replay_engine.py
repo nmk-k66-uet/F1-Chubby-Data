@@ -5,7 +5,7 @@ import os
 import time
 import streamlit.components.v1 as components
 
-CACHE_DIR = '../f1_cache'
+CACHE_DIR = 'f1_cache'
 
 # ==========================================
 # LAZY-LOADED REPLAY ENGINE (NATIVE JS)
