@@ -14,7 +14,6 @@ TEAM_COLORS = {
     "kick": "#52E252", "racing bulls": "#6692FF"
 }
 
-@st.cache_data(show_spinner=False)
 def get_image_base64(path):
     """Mã hóa ảnh thành Base64 để nhúng vào HTML"""
     if path and isinstance(path, str) and os.path.exists(path):
@@ -36,15 +35,9 @@ def get_driver_image_b64(first_name, last_name):
     """Tìm ảnh tay đua trong thư mục assets/drivers/"""
     last_norm = normalize_name(last_name)
     first_norm = normalize_name(first_name)
-    
-    possible_paths = [
-        f"assets/drivers/{last_norm}.avif", f"assets/drivers/{last_norm}.png",
-        f"assets/drivers/{first_norm}{last_norm}.avif", f"assets/drivers/{first_norm}{last_norm}.png",
-        f"assets/Drivers/{last_norm}.avif", f"assets/Drivers/{last_norm}.png",
-    ]
-    for path in possible_paths:
-        b64 = get_image_base64(path)
-        if b64: return b64
+    path = f"assets/drivers/{first_norm} {last_norm}.avif"
+    b64 = get_image_base64(path)
+    if b64: return b64
     return None
 
 def get_team_logo_b64(team_name):
@@ -115,6 +108,9 @@ def fetch_all_driver_standings(year):
     return drivers_data
 
 def render():
+    if 'selected_year' not in st.session_state: 
+        st.session_state['selected_year'] = 2026
+
     st.markdown("""
         <style>
             /* ==============================================================
@@ -256,9 +252,9 @@ def render():
             }
             .drv-portrait {
                 position: absolute;
-                right: -10px;
-                bottom: 0;
-                height: 125%;
+                right: 150px;
+                bottom: -300px;
+                height: 300%;
                 z-index: 1;
                 opacity: 0.95;
                 mask-image: linear-gradient(to right, transparent 0%, black 40%);
@@ -274,16 +270,16 @@ def render():
         st.write("") 
         if st.button("←", key="back_home_btn_drv"):
             st.switch_page("pages/home.py")
-            
-    with col_hdr1:
-        if 'selected_year' not in st.session_state: st.session_state['selected_year'] = 2024
-        st.markdown(f"<h2 style='margin-top: 0;'>Driver Standings {st.session_state['selected_year']}</h2>", unsafe_allow_html=True)
-        
+
     with col_hdr2:
-        years_list = [2026, 2025, 2024, 2023, 2022, 2021]
-        safe_index = years_list.index(st.session_state['selected_year']) if st.session_state['selected_year'] in years_list else 2
+        years_list = [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018]
+        safe_index = years_list.index(st.session_state['selected_year']) if st.session_state['selected_year'] in years_list else 0
         st.session_state['selected_year'] = st.selectbox("Season", years_list, index=safe_index, label_visibility="collapsed")
 
+    with col_hdr1:
+        if 'selected_year' not in st.session_state: st.session_state['selected_year'] = 2026
+        st.markdown(f"<h2 style='margin-top: 0;'>Driver Standings {st.session_state['selected_year']}</h2>", unsafe_allow_html=True)
+        
     st.divider()
 
     # Lấy dữ liệu API
@@ -305,8 +301,11 @@ def render():
         team_html = f"<img src='{logo_b64}' class='drv-team-logo'>" if logo_b64 else f"<span class='drv-team-name'>{d['team']}</span>"
         
         # Lấy ảnh chân dung (Portrait)
-        portrait_b64 = get_driver_image_b64(d["first_name"], d["last_name"])
-        portrait_html = f"<img src='{portrait_b64}' class='drv-portrait'>" if portrait_b64 else ""
+        if st.session_state['selected_year'] == 2026:
+            portrait_b64 = get_driver_image_b64(d["first_name"], d["last_name"])
+            portrait_html = f"<img src='{portrait_b64}' class='drv-portrait'>" if portrait_b64 else ""
+        else:
+            portrait_html = ""
 
         # Sinh mã HTML cho thẻ Card
         card_html = f"""<div class='drv-card' style='border-left: 6px solid {team_color};'>

@@ -15,7 +15,6 @@ TEAM_COLORS = {
 
 @st.cache_data(show_spinner=False)
 def get_image_base64(path):
-    """Mã hóa ảnh thành Base64 để nhúng vào HTML"""
     if path and isinstance(path, str) and os.path.exists(path):
         with open(path, "rb") as f:
             data = f.read()
@@ -107,6 +106,9 @@ def fetch_constructors_data(year):
     return teams_data
 
 def render():
+    if 'selected_year' not in st.session_state: 
+        st.session_state['selected_year'] = 2026
+
     st.markdown("""
         <style>
             .block-container { padding-top: 1rem !important; max-width: 95% !important; }
@@ -148,13 +150,13 @@ def render():
     with col_back:
         if st.button("←", key="btn_back_home_cons", type="primary"):
             st.switch_page("pages/home.py")
-    with col_title:
-        st.markdown("<h2 style='margin: 0; padding: 0;'>Constructor Standings</h2>", unsafe_allow_html=True)
     with col_sel:
-        if 'selected_year' not in st.session_state: st.session_state['selected_year'] = 2024
-        years_list = [2026, 2025, 2024, 2023, 2022, 2021]
-        safe_index = years_list.index(st.session_state['selected_year']) if st.session_state['selected_year'] in years_list else 2
+        if 'selected_year' not in st.session_state: st.session_state['selected_year'] = 2026
+        years_list = [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018]
+        safe_index = years_list.index(st.session_state['selected_year']) if st.session_state['selected_year'] in years_list else 0
         st.session_state['selected_year'] = st.selectbox("Season", years_list, index=safe_index, label_visibility="collapsed")
+    with col_title:
+        st.markdown(f"<h2 style='margin: 0; padding: 0;'>Constructor Standings {st.session_state['selected_year']}</h2>", unsafe_allow_html=True)
 
     st.divider()
     teams_data = fetch_constructors_data(st.session_state['selected_year'])
@@ -164,13 +166,14 @@ def render():
         target_col = col1 if i % 2 == 0 else col2
         team_color = get_team_color(t["name"])
         
-        # Dòng Print Debug của bạn được giữ nguyên
-        print(f"[DEBUG] Tên đội đua từ API: '{t['name']}' | Tên file xe cần tìm: '{t['name'].lower().replace(' ', '')}.avif'")
-
         logo_b64 = get_team_logo_b64(t["name"])
         logo_html = f"<img src='{logo_b64}' class='cons-logo'>" if logo_b64 else ""
-        car_b64 = get_car_image_b64(t["name"], st.session_state['selected_year'])
-        car_html = f"<img src='{car_b64}' class='cons-car'>" if car_b64 else ""
+        
+        if st.session_state['selected_year'] == 2026:
+            car_b64 = get_car_image_b64(t["name"], st.session_state['selected_year'])
+            car_html = f"<img src='{car_b64}' class='cons-car'>" if car_b64 else ""
+        else:
+            car_html = ""
 
         card_html = f"""<div class='cons-card' style='border-left: 8px solid {team_color};'>
 <div class='cons-info'>
