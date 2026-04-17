@@ -10,7 +10,7 @@ def fragment_strategy(session):
     - Biểu đồ dòng thời gian sử dụng lốp (Tire Strategy Timeline).
     - Phân tích chi tiết từng stint (Stint Performance Analysis) bao gồm độ mòn lốp và tính ổn định.
     """
-    sub_overview, sub_stint = st.tabs(["📊 Strategy Overview", "📋 Stint Detail Analysis"])
+    sub_overview, sub_stint = st.tabs(["Strategy Overview", "Stint Detail Analysis"])
     
     # Tiền xử lý dữ liệu laps để lấy thông tin stint và lốp
     all_laps = session.laps.copy().dropna(subset=['Stint', 'Compound'])
@@ -108,7 +108,7 @@ def fragment_practice_strategy(session):
     """
     Hiển thị tab Chiến thuật (Strategy) thu gọn cho Practice.
     """
-    sub_overview, sub_stint = st.tabs(["📊 Strategy Overview", "📋 Stint Detail Analysis"])
+    sub_overview, sub_stint = st.tabs(["Strategy Overview", "Stint Detail Analysis"])
     
     all_laps = session.laps.copy().dropna(subset=['Stint', 'Compound'])
     compound_colors = {

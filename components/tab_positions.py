@@ -11,7 +11,7 @@ def fragment_positions(session, drivers, session_name):
     - Bảng thông báo từ Race Control
     - Phân tích vị trí đạt được/đánh mất (Gained/Lost)
     """
-    sub_chart, sub_rc, sub_analysis = st.tabs(["📈 Position Chart", "🚨 Race Control", "📊 Analysis"])
+    sub_chart, sub_rc, sub_analysis = st.tabs(["Position Chart", "Race Control", "Analysis"])
     
     if "sel_all_pos" not in st.session_state:
         st.session_state["sel_all_pos"] = True

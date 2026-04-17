@@ -15,8 +15,17 @@ from components.tab_telemetry import render_telemetry_tab
 from components.predictor_ui import render_predictor_tab
 from components.replay_engine import fragment_replay_continuous
 from components.tab_race_control import fragment_race_control
+from components.navbar import render_navbar
 
-def render():
+def render():   
+    st.markdown("""
+        <style>
+            .block-container { padding-top: 1rem !important; max-width: 95% !important; }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    # render_navbar() 
+
     if not st.session_state.get('selected_event'):
         st.warning("Please select a race from the Calendar first.")
         if st.button("Return to Calendar"):
@@ -24,24 +33,19 @@ def render():
         return
 
     event_info = st.session_state['selected_event']
-    year = event_info['year']
-    round_num = event_info['round']
-    event_name = event_info['name']
+    year, round_num, event_name = event_info['year'], event_info['round'], event_info['name']
     flag_url = get_flag_url(event_info['country'])
 
-    st.divider()
-    col_back, col_title, col_session = st.columns([0.15, 3.5, 1.2])
+    col_back, col_title, col_session = st.columns([0.15, 3.5, 1.2], vertical_alignment="center")
 
     with col_back:
-        st.write("") 
         if st.button("←", key="back_home_btn"):
             keys_to_clear = [k for k in st.session_state.keys() if k.startswith(('ch_', 'sel_', 'del_', 'tel_', 'dom_')) or k in ['lt_boxes', 'lt_box_counter', 'sel_all_pos', 'replay_session_id', 'js_payload', 'predictions_race_id', 'predictions_df', 'gemini_insight', 'setup_profiler_fig']]
-            for key in keys_to_clear:
-                del st.session_state[key]
+            for key in keys_to_clear: del st.session_state[key]
             st.switch_page("pages/home.py")
 
     with col_title:
-        st.markdown(f"<h2 style='margin-top: 0;'><img src='{flag_url}' width='48' style='border-radius:6px; vertical-align:middle; margin-right:15px; box-shadow: 0 0 4px rgba(255,255,255,0.3);'> {event_name} {year}</h2>", unsafe_allow_html=True)
+        st.markdown(f"<h2 style='margin: 0;'><img src='{flag_url}' width='48' style='border-radius:6px; vertical-align:middle; margin-right:15px; box-shadow: 0 0 4px rgba(255,255,255,0.3);'> {event_name} {year}</h2>", unsafe_allow_html=True)
     
     with col_session:
         schedule = fastf1.get_event_schedule(year)
@@ -133,8 +137,8 @@ def render():
     # --- PHÂN NHÁNH TABS ---
     if session_code.startswith('FP'):
         tab_res, tab_strat, tab_laps, tab_dom, tab_rc, tab_tel = st.tabs([
-            "📊 Results", "⏱️ Strategy", "⏱️ Lap Times", 
-            "🗺️ Track Dominance", "🚨 Race Control", "📉 Telemetry"
+            "Results", "Strategy", "Lap Times", 
+            "Track Dominance", "Race Control", "Telemetry"
         ])
         
         with tab_res:
@@ -153,8 +157,8 @@ def render():
     else:
         # RACE / QUALIFYING / SPRINT
         tab_res, tab_pos, tab_strat, tab_laps, tab_dom, tab_tel, tab_predict, tab_replay = st.tabs([
-            "📊 Results", "📈 Positions", "⏱️ Strategy", "⏱️ Lap Times", 
-            "🗺️ Track Dominance", "📉 Telemetry", "✨ Race Predictor", "🎥 Replay"
+            "Results", "Positions", "Strategy", "Lap Times", 
+            "Track Dominance", "Telemetry", "Race Predictor", "Replay"
         ])
         
         with tab_res:

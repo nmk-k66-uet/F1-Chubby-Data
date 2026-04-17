@@ -7,24 +7,31 @@ from core.data_loader import get_schedule
 from core.config import get_flag_url
 
 def nav_to(page_path):
-    """Hàm hỗ trợ điều hướng an toàn, phòng trường hợp page chưa được tạo"""
     try:
         st.switch_page(f"pages/{page_path}.py")
     except Exception:
-        st.toast(f"Tính năng này đang được phát triển!", icon="🚧")
+        st.toast(f"Functions under development: {page_path}", icon="🚧")
 
 def render_navbar():
     st.markdown("""
         <style>
-            /* --- CSS NAVBAR TABS (Primary Button) --- */
             [data-testid="stBaseButton-primary"] {
-                background-color: rgba(255,255,255,0.05) !important; border: 1px solid rgba(255,255,255,0.05) !important; color: #a0a0a0 !important;
-                border-radius: 8px !important; padding: 0 !important; font-size: 0.9rem !important;
-                height: 45px !important; min-height: 45px !important; font-weight: bold !important; transition: all 0.2s ease-in-out !important;
+                background-color: transparent !important; 
+                border: 1px solid #ff4b4b !important; 
+                color: #ff4b4b !important;
+                border-radius: 20px !important; 
+                padding: 0px 15px !important; 
+                font-size: 0.85rem !important;
+                height: 32px !important; 
+                min-height: 32px !important; 
+                font-weight: bold !important; 
+                transition: all 0.2s ease-in-out !important;
             }
             [data-testid="stBaseButton-primary"]:hover { 
-                background-color: rgba(255, 75, 75, 0.1) !important; border-color: #ff4b4b !important; color: #ffffff !important; transform: translateY(-2px) !important;
+                background-color: rgba(255, 75, 75, 0.1) !important; 
+                transform: translateY(-2px) !important;
             }
+            [data-testid="stSidebar"] { display: none; }
         </style>
     """, unsafe_allow_html=True)
 
