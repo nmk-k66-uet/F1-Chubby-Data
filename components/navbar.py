@@ -32,7 +32,7 @@ def render_navbar():
     # TOP NAVIGATION BAR LAYOUT
     # Mở rộng cột Next Session (4.0) để tên không bị che
     # ==========================================
-    col_logo, col_next, col_n1, col_n2, col_n3, col_n4 = st.columns([1.5, 1.3, 1.0, 1.0, 1.2, 1.3], vertical_alignment="center")
+    col_logo, col_next, col_n1, col_n2, col_n3, col_n4 = st.columns([0.9, 1.3, 1.0, 1.0, 1.0, 1.0], vertical_alignment="center")
     
     with col_logo:
         st.markdown("""
