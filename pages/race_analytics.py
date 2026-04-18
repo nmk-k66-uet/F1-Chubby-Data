@@ -1,8 +1,22 @@
+"""Race Analytics Page - Historical Analysis and Statistics
+
+Historical race data analysis and statistical insights:
+- Season performance statistics
+- Circuit-specific performance trends
+- Head-to-head driver comparisons
+- Tire strategy effectiveness analysis
+- Weather impact on race outcomes
+- Statistical models and predictions
+
+"""
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime
 import base64
 import os
+import time
+import streamlit.components.v1 as components
 
 from core.data_loader import get_schedule, get_race_winner
 from core.config import get_flag_url
@@ -46,7 +60,7 @@ def get_image_base64(path):
             data = f.read()
             b64 = base64.b64encode(data).decode()
             ext = path.split('.')[-1].lower()
-            mime_types = {"avif": "image/avif", "png": "image/png", "jpg": "image/jpeg"}
+            mime_types = {"avif": "image/avif"}
             mime = mime_types.get(ext, "image/jpeg")
             return f"data:{mime};base64,{b64}"
     return None
@@ -54,14 +68,141 @@ def get_image_base64(path):
 def load_bg_image(path_or_url):
     if not path_or_url:
         return TRACK_BGS.get("Default", "")
-    if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
-        return path_or_url
-    return get_image_base64(path_or_url) or TRACK_BGS.get("Default", "")
+    return get_image_base64(path_or_url)
+
+def render_intro_overlay():
+    """Display season intro video as full-screen overlay when triggered.
+    
+    Checks session state for 'play_intro' flag and displays video if true.
+    Converts video to base64 and injects into modal dialog using JavaScript.
+    
+    Output: Full-screen video player overlay showing season intro video.
+    Supports video years matching assets/intro/{year}.mp4 format.
+    """
+    if st.session_state.get('play_intro', False):
+        year = st.session_state.get('selected_year', 2026)
+        
+        st.session_state['play_intro'] = False
+        st.session_state['video_just_injected'] = True
+        
+        video_path = f"assets/intro/{year}.mp4" 
+            
+        with open(video_path, "rb") as f:
+            video_b64 = base64.b64encode(f.read()).decode()
+        
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                /* Setup body trải dài toàn màn hình */
+                body {{ margin: 0; padding: 0; background-color: #000; overflow: hidden; width: 100vw; height: 100vh; }}
+                #intro-overlay {{
+                    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+                    display: flex; justify-content: center; align-items: center; background: black;
+                }}
+                /* Đổi object-fit thành contain để giữ đúng tỉ lệ video, không bị crop/biến dạng */
+                video {{ width: 100%; height: 100%; object-fit: contain; }}
+                #skip-btn {{
+                    position: absolute; bottom: 40px; right: 40px;
+                    padding: 12px 28px; font-size: 1.1rem; font-weight: 800; font-family: "Source Sans Pro", sans-serif;
+                    background-color: rgba(255, 75, 75, 0.6); color: white;
+                    border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 8px; cursor: pointer;
+                    display: none; z-index: 100; transition: all 0.3s ease; text-transform: uppercase; letter-spacing: 1px;
+                    backdrop-filter: blur(4px);
+                }}
+                #skip-btn:hover {{ background-color: rgba(255, 75, 75, 1); border-color: white; transform: translateY(-2px); }}
+            </style>
+        </head>
+        <body>
+            <div id="intro-overlay">
+                <!-- Bật chế độ autoplay + muted trước để lách luật trình duyệt -->
+                <video id="intro-video" autoplay muted playsinline>
+                    <source src="data:video/mp4;base64,{video_b64}" type="video/mp4">
+                </video>
+                <button id="skip-btn">Skip Intro ⏭</button>
+            </div>
+            
+            <script>
+                // Lấy thẻ iframe và tách khỏi luồng văn bản (document flow)
+                const myIframe = window.frameElement;
+                if (myIframe) {{
+                    // Streamlit bọc iframe trong thẻ div class 'element-container'. Phải lấy thẻ bọc ngoài cùng này.
+                    const wrapper = myIframe.closest('.element-container') || myIframe.parentElement;
+                    
+                    if (wrapper) {{
+                        wrapper.style.position = 'fixed';
+                        wrapper.style.top = '0';
+                        wrapper.style.left = '0';
+                        wrapper.style.width = '100vw';
+                        wrapper.style.height = '100vh';
+                        wrapper.style.zIndex = '999999';
+                        wrapper.style.margin = '0';
+                        wrapper.style.padding = '0';
+                    }}
+
+                    // Trải phẳng iframe cho khớp với wrapper
+                    myIframe.style.position = 'absolute';
+                    myIframe.style.top = '0';
+                    myIframe.style.left = '0';
+                    myIframe.style.width = '100%';
+                    myIframe.style.height = '100%';
+                    myIframe.style.border = 'none';
+                }}
+
+                const video = document.getElementById('intro-video');
+                const skipBtn = document.getElementById('skip-btn');
+                
+                // Trễ 0.5s để trình duyệt ghi nhận DOM, sau đó tự động bật tiếng lên
+                setTimeout(() => {{
+                    video.muted = false;
+                }}, 500);
+                
+                // Hiện nút skip sau đúng 15 giây
+                setTimeout(() => {{
+                    skipBtn.style.display = 'block';
+                }}, 10000);
+                
+                // Tắt video và thẻ iframe che giao diện
+                function closeIntro() {{
+                    document.getElementById('intro-overlay').style.display = 'none';
+                    video.pause();
+                    if (myIframe) {{
+                        const wrapper = myIframe.closest('.element-container') || myIframe.parentElement;
+                        if (wrapper) {{
+                            wrapper.style.display = 'none'; // Xóa dấu vết của wrapper để web không bị đẩy xuống
+                        }}
+                        myIframe.style.display = 'none';
+                    }}
+                }}
+                
+                skipBtn.addEventListener('click', closeIntro);
+                video.addEventListener('ended', closeIntro);
+            </script>
+        </body>
+        </html>
+        """
+        
+        components.html(html_content, height=0)
 
 # ==========================================
 # 2. RENDER GIAO DIỆN CHÍNH
 # ==========================================
 def render():
+    """Render the race analytics page with historical data analysis.
+    
+    Output: Displays statistical analysis and historical trends for:
+    - Driver career statistics
+    - Team performance across seasons
+    - Circuit records and performance patterns
+    - Weather and condition impacts
+    - Tire compound effectiveness
+    """
+    render_intro_overlay()
+    if st.session_state.get('video_just_injected', False):
+        st.session_state['video_just_injected'] = False
+        time.sleep(0.8)
+
     st.markdown("""
         <style>
             .block-container { padding-top: 1rem !important; max-width: 95% !important; }
@@ -82,7 +223,7 @@ def render():
             div.st-key-btn_back_home button:hover { background-color: rgba(255, 255, 255, 0.1) !important; border-color: #ffffff !important; color: #ffffff !important; transform: translateY(-2px) !important; }
 
             /* ==============================================================
-               CSS FINAL: FLEXBOX STRETCH - ÉP BUNG KÍCH THƯỚC TUYỆT ĐỐI
+               FLEXBOX STRETCH
                ============================================================== */
             div[data-testid="stButton"] { width: 100% !important; }
             
@@ -209,7 +350,6 @@ def render():
                     event_name = str(event['EventName']).strip().replace('_', '').replace('*', '').replace('~', '').replace('`', '')
                     location = str(event.get('Location', country)).strip().replace('_', '').replace('*', '').replace('~', '').replace('`', '')
                     
-                    # 3. LẤY ẢNH NỀN THEO TÊN SỰ KIỆN
                     raw_bg_path = TRACK_BGS.get(event_name)
                     bg_url = load_bg_image(raw_bg_path)
                     
@@ -251,7 +391,6 @@ def render():
                             
                     current_flag = flag_url if flag_url else div_img
                     
-                    # 4. CHÈN `![bg]({bg_url})` VÀO ĐẦU LABEL ĐỂ TẠO ẢNH NỀN
                     if status_text == "Upcoming":
                         btn_label = f"![bg]({bg_url})![f]({current_flag})__{event_name}__*{location}*~Round {round_num}~![d]({div_img})``{date_str}``__{line1}__~{status_text}~"
                     else:

@@ -5,9 +5,26 @@ import plotly.graph_objects as go
 @st.fragment
 def fragment_telemetry_card(session, drivers, chart_info, idx):
     """
-    Hiển thị một thẻ biểu đồ (Card) telemetry đơn lẻ.
-    Được đánh dấu @st.fragment để khi người dùng thay đổi Driver/Lap ở 1 thẻ, 
-    chỉ thẻ đó tải lại dữ liệu chứ không tải lại toàn bộ tab.
+    Renders a single telemetry chart card with driver/lap selection.
+    
+    Using @st.fragment decorator ensures that changing driver/lap in one card
+    only reloads that card, not the entire tab (improves performance).
+    
+    Args:
+        session: FastF1 session object with telemetry data.
+        drivers (list): List of driver abbreviations available in session.
+        chart_info (dict): Chart configuration with keys:
+                          - 'title': Chart title (e.g., 'Speed Trace')
+                          - 'metric': Telemetry metric name (e.g., 'Speed', 'Throttle')
+                          - 'type': 'line' for line charts, 'map' for track map with gear colors
+                          - 'unit': Y-axis unit label (e.g., 'km/h', '%')
+        idx (int): Card index for unique session state keys.
+    
+    Output: Displays card with driver/lap selector and interactive Plotly chart.
+    
+    Chart Types:
+    - 'line': Metric vs distance with line plot
+    - 'map': Track map colored by gear (gear shifts on track visualization)
     """
     gear_colors = {1: '#00FFFF', 2: '#FF7F50', 3: '#008080', 4: '#FF0000', 5: '#FF1493', 6: '#0000CD', 7: '#ADFF2F', 8: '#FFD700'}
     
@@ -81,8 +98,21 @@ def fragment_telemetry_card(session, drivers, chart_info, idx):
 
 def render_telemetry_tab(session, drivers):
     """
-    Hàm chính để render toàn bộ Tab Telemetry.
-    Quản lý việc tạo lưới 2x3 cho 6 biểu đồ Telemetry.
+    Main function to render the complete Telemetry tab with 6 telemetry charts.
+    
+    Creates a 2-column, 3-row grid layout displaying 6 different telemetry metrics:
+    1. Speed Trace: Speed vs distance
+    2. Gear Shifts: Track map colored by gear (visual gear shift positions)
+    3. Throttle Input: Throttle percentage vs distance
+    4. Brake Input: Brake application vs distance
+    5. RPM: Engine RPM vs distance
+    6. DRS Usage: DRS state (on/off) vs distance
+    
+    Args:
+        session: FastF1 session object with telemetry data.
+        drivers (list): List of driver abbreviations available in session.
+    
+    Output: Displays full telemetry analysis dashboard with 6 interactive cards.
     """
     st.subheader("Comprehensive Telemetry Analysis")
     st.divider()

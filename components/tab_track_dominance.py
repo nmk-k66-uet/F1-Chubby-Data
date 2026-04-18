@@ -6,10 +6,23 @@ import plotly.graph_objects as go
 @st.fragment
 def fragment_dominance(session, drivers):
     """
-    Hiển thị tab Track Dominance bao gồm:
-    - Bản đồ đường đua chia theo Mini-sectors hiển thị tay đua nào nhanh hơn.
-    - Biểu đồ Speed Trace so sánh tốc độ theo khoảng cách.
-    - Các biểu đồ phụ trợ: Throttle, Brake, RPM, DRS.
+    Renders the Track Dominance tab comparing two drivers' performance around the track.
+    
+    Features:
+    - Track dominance map: Track divided into 50 mini-sectors, colored by fastest driver
+    - Speed trace comparison: Line plot comparing speeds vs distance
+    - Secondary metrics: Throttle, brake, RPM, and DRS comparison charts
+    
+    Args:
+        session: FastF1 session object with telemetry data.
+        drivers (list): List of driver abbreviations available in session.
+    
+    Output: Displays side-by-side comparison charts and track dominance visualization.
+    
+    Dominance Logic:
+    - Yellow (Neutral): Speed difference <= 2 km/h
+    - Driver 1 color (Faster): Driver 1 > Driver 2 speed
+    - Driver 2 color (Faster): Driver 2 > Driver 1 speed
     """
     col_title, col_ctrls = st.columns([1.2, 2.8])
     with col_title:

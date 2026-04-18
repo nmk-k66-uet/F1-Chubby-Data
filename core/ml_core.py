@@ -1,3 +1,15 @@
+"""
+Machine Learning Core Module - F1 Prediction Models
+
+This module contains the core ML functionality for F1 race prediction:
+- Pre-Race Podium Probability Prediction: Predicts podium finishes before race starts
+- In-Race Win/Podium Prediction: Updates predictions during the race based on live telemetry
+- Models use Random Forest Classifier for feature importance and interpretability
+
+Models are trained on historical F1 data and cached for performance.
+Features include grid position, team tier, qualifying delta, pace delta, and driver form.
+"""
+
 import os
 import pandas as pd
 import numpy as np
@@ -16,12 +28,12 @@ warnings.filterwarnings("ignore")
 CACHE_DIR = 'f1_cache'
 ASSET_DIR = os.path.join('assets', 'Models')
 
-# Pre-Race Prediction Paths
+# Pre-Race Prediction Model Paths
 PRE_RACE_DATA_PATH = os.path.join(CACHE_DIR, 'historical_data.csv')
 PRE_RACE_MODEL_PATH = os.path.join(ASSET_DIR, 'podium_model.pkl')
 PRE_RACE_METRICS_PATH = os.path.join(CACHE_DIR, 'model_metrics.txt')
 
-# In-Race Prediction Paths
+# In-Race Prediction Model Paths
 IN_RACE_DATA_PATH = os.path.join(CACHE_DIR, 'in_race_historical_data.csv')
 IN_RACE_WIN_MODEL_PATH = os.path.join(ASSET_DIR, 'in_race_win_model.pkl')
 IN_RACE_PODIUM_MODEL_PATH = os.path.join(ASSET_DIR, 'in_race_podium_model.pkl')
@@ -42,12 +54,17 @@ fastf1.set_log_level('ERROR')
 
 def get_team_tier(team_name):
     """
-    Categorizes F1 teams into performance tiers to help the model evaluate car performance.
+    Categorizes F1 teams into three performance tiers based on historical competitiveness.
+    This helps the model normalize performance expectations across teams.
     
     Args:
         team_name (str): The name of the F1 team.
+    
     Returns:
-        int: 1 (Top tier), 2 (Mid-field tier), 3 (Backmarkers).
+        int: Team tier classification:
+             1 = Top teams (Red Bull, Ferrari, McLaren, Mercedes)
+             2 = Mid-field teams (Aston Martin, Alpine, RB, AlphaTauri, Racing Point)
+             3 = Backmarker teams (all others)
     """
     team_str = str(team_name).lower()
     t1 = ['red bull', 'ferrari', 'mclaren', 'mercedes']
@@ -58,40 +75,52 @@ def get_team_tier(team_name):
 
 def extract_best_q_time(row):
     """
-    Extracts the fastest qualifying lap time for a given driver across all Q1, Q2, and Q3 sessions.
+    Extracts the best qualifying lap time across all three qualifying sessions (Q1, Q2, Q3).
+    Only the fastest lap in each session is used; this function finds the absolute best.
     
     Args:
-        row (pd.Series): A row from the FastF1 Qualifying results DataFrame.
+        row (pd.Series): A row from the FastF1 Qualifying results DataFrame 
+                        containing 'Q1', 'Q2', 'Q3' columns with timedelta objects.
+    
     Returns:
-        float or None: The fastest lap time in seconds, or None if unavailable.
+        float: Fastest qualifying lap time in seconds. Returns None if no valid lap found.
     """
     times = []
     for col in ['Q1', 'Q2', 'Q3']:
         val = row.get(col)
         if pd.notna(val):
-            try: times.append(val.total_seconds())
-            except: pass
+            try: 
+                times.append(val.total_seconds())
+            except: 
+                pass
     return min(times) if times else None
 
 def extract_fp2_long_run_pace(session):
     """
-    Extracts the long-run pace (race simulation pace) from Free Practice 2 or Sprint sessions.
-    Only considers stints with 5 or more consecutive laps to filter out out-laps and aborted laps.
+    Analyzes Free Practice 2 (or Sprint) session to extract race simulation pace.
+    Only considers long stints (5+ laps) to filter out warming laps and aborted attempts.
     
     Args:
-        session: FastF1 session object.
+        session: FastF1 session object (FP2 or Sprint).
+    
     Returns:
-        dict: Mapping of driver abbreviations to their pace delta compared to the fastest driver.
+        dict: Maps driver abbreviations to pace delta (seconds slower than fastest driver).
+              Example: {'VER': 0.0, 'HAM': 0.45} means Hamilton is 0.45s/lap slower than Verstappen.
     """
     try:
+        # Load session data (accurate laps only, excluding invalid data)
         session.load(telemetry=False, weather=False, messages=False)
         laps = session.laps.pick_accurate()
-        if laps.empty: return {}
+        if laps.empty: 
+            return {}
         
+        # Group laps by driver and stint (stint = continuous running period)
         stints = laps.groupby(['Driver', 'Stint']).size().reset_index(name='LapCount')
-        long_stints = stints[stints['LapCount'] >= 5]
-        if long_stints.empty: return {}
+        long_stints = stints[stints['LapCount'] >= 5]  # Only 5+ lap stints
+        if long_stints.empty: 
+            return {}
         
+        # Calculate median lap time for each driver's longest stint
         paces = {}
         for _, row in long_stints.iterrows():
             drv = row['Driver']
@@ -99,13 +128,18 @@ def extract_fp2_long_run_pace(session):
             stint_laps = laps[(laps['Driver'] == drv) & (laps['Stint'] == stint_num)]
             median_time = stint_laps['LapTime'].median().total_seconds()
             
+            # Keep only the fastest stint for each driver
             if drv not in paces or median_time < paces[drv]:
                 paces[drv] = median_time
                 
-        if not paces: return {}
+        if not paces: 
+            return {}
+        
+        # Calculate delta from fastest driver's pace
         fastest_pace = min(paces.values())
         return {drv: (time - fastest_pace) for drv, time in paces.items()}
-    except: return {}
+    except: 
+        return {}
 
 
 # ==========================================
@@ -114,40 +148,54 @@ def extract_fp2_long_run_pace(session):
 
 def initialize_model(force_retrain=False):
     """
-    Loads or trains the Pre-Race Podium Prediction model.
+    Loads or trains the Pre-Race Podium Prediction Random Forest model.
     
-    Features used:
-    - GridPosition: The starting position of the driver.
-    - TeamTier: The performance tier of the driver's team (1, 2, or 3).
-    - QualifyingDelta: The time gap to the pole position lap (in seconds).
-    - FP2_PaceDelta: The average long-run pace deficit (in seconds).
-    - DriverForm: The ratio of points scored by the driver so far in the season.
+    The model predicts whether a driver will finish in the podium (P1, P2, or P3) based on:
+    - GridPosition: Pole position, P2, P3, etc. (1-20)
+    - TeamTier: Team performance category (1=Top, 2=Mid, 3=Backmarker)
+    - QualifyingDelta: Gap to pole position lap time (seconds)
+    - FP2_PaceDelta: Pace deficit vs. fastest during practice (seconds)
+    - DriverForm: Points accumulated this season / maximum possible points
     
     Args:
-        force_retrain (bool): Forces the model to retrain using the latest data if True.
+        force_retrain (bool, optional): If True, forces retraining from historical data CSV.
+                                       Default: False (load cached model if exists).
+    
     Returns:
-        RandomForestClassifier: The trained model for predicting pre-race podium probability.
+        sklearn.ensemble.RandomForestClassifier: Trained model object for predictions.
+    
+    Output: Saves trained model to PRE_RACE_MODEL_PATH and metrics to PRE_RACE_METRICS_PATH.
+    
+    Raises:
+        FileNotFoundError: If historical_data.csv not found and force_retrain=True.
     """
+    # Load cached model if available
     if not force_retrain and os.path.exists(PRE_RACE_MODEL_PATH):
         return joblib.load(PRE_RACE_MODEL_PATH)
     
+    # Verify training data exists
     if not os.path.exists(PRE_RACE_DATA_PATH):
         raise FileNotFoundError(f"[Error] Dataset not found: {PRE_RACE_DATA_PATH}")
         
+    # === Load and Prepare Data ===
     df = pd.read_csv(PRE_RACE_DATA_PATH)
     
-    # Impute missing FP2 Pace Delta with the median of their Team Tier, or default to 2.0s
+    # Handle missing FP2 pace data - impute with team tier median or default 2.0s
     df['FP2_PaceDelta'] = df['FP2_PaceDelta'].fillna(df.groupby('TeamTier')['FP2_PaceDelta'].transform('median'))
     df['FP2_PaceDelta'] = df['FP2_PaceDelta'].fillna(2.0)
         
     print("[ML] Preparing data and executing Grid Search for Pre-Race Model...")
-    X = df[['GridPosition', 'TeamTier', 'QualifyingDelta', 'FP2_PaceDelta', 'DriverForm']]
-    y = df['Podium']
     
+    # === Feature Selection and Target ===
+    X = df[['GridPosition', 'TeamTier', 'QualifyingDelta', 'FP2_PaceDelta', 'DriverForm']]
+    y = df['Podium']  # Binary: 1=Podium, 0=Non-Podium
+    
+    # === Train/Test Split ===
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
     
+    # === Hyperparameter Grid Search ===
     param_grid = {
-        'n_estimators': [50, 100, 150, 200],
+        'n_estimators': [50, 100, 150, 200],  # Number of trees in the forest
         'max_depth': [4, 6, 8, 10],
         'min_samples_split': [2, 5, 10],
         'min_samples_leaf': [1, 2, 4]
@@ -406,7 +454,6 @@ def predict_live_lap(models, live_lap_df):
 # ==========================================
 if __name__ == '__main__':
     print("Initializing Standalone Retrain...")
-    # Uncomment the following lines to test retrain manually
-    initialize_model(force_retrain=True)
-    train_in_race_model(force_retrain=True)
+    # initialize_model(force_retrain=True)
+    # train_in_race_model(force_retrain=True)
     print("Done.")

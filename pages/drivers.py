@@ -1,3 +1,14 @@
+"""Drivers Page - Driver Details and Performance Analysis
+
+Detailed view of individual driver performance:
+- Driver selection interface
+- Race-by-race results comparison
+- In-race analytics and telemetry visualization
+- Live race predictions and analysis
+- Interactive replay engine
+
+"""
+
 import streamlit as st
 import pandas as pd
 import requests
@@ -21,7 +32,7 @@ def get_image_base64(path):
             data = f.read()
             b64 = base64.b64encode(data).decode()
             ext = path.split('.')[-1].lower()
-            mime_types = {"avif": "image/avif", "png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}
+            mime_types = {"avif": "image/avif"}
             mime = mime_types.get(ext, "image/png")
             return f"data:{mime};base64,{b64}"
     return None
@@ -108,19 +119,22 @@ def fetch_all_driver_standings(year):
     return drivers_data
 
 def render():
+    """Render the complete driver details page with race data tabs.
+    
+    Output: Displays driver selection interface and multiple tabs for:
+    - Results: Qualifying and race results
+    - Lap Times: Lap-by-lap timing comparison
+    - Telemetry: Speed, throttle, brake, RPM, and DRS data
+    - Live Race: Real-time race predictions and momentum analysis
+    - Replay: Interactive race replay visualization
+    """
     if 'selected_year' not in st.session_state: 
         st.session_state['selected_year'] = 2026
 
     st.markdown("""
         <style>
-            /* ==============================================================
-               CSS ĐỒNG BỘ LAYOUT VÀ NAVBAR GIỐNG HỆT TRANG HOME
-               ============================================================== */
-            
-            /* 1. Đồng bộ khoảng cách lề và độ rộng màn hình */
             .block-container { padding-top: 1rem !important; max-width: 95% !important; }
             
-            /* 2. Đồng bộ design nút Navbar (Nút Primary) */
             [data-testid="stBaseButton-primary"] {
                 background-color: transparent !important; border: 1px solid #ff4b4b !important; color: #ff4b4b !important;
                 border-radius: 20px !important; padding: 0px 15px !important; font-size: 0.85rem !important;
@@ -132,7 +146,7 @@ def render():
             }
 
             /* ==============================================================
-               CSS CHO THẺ DRIVER CARD TƯƠNG TỰ ẢNH THIẾT KẾ
+               CSS DRIVER CARD
                ============================================================== */
             .drv-card {
                 display: flex;
@@ -282,14 +296,12 @@ def render():
         
     st.divider()
 
-    # Lấy dữ liệu API
     drivers_data = fetch_all_driver_standings(st.session_state['selected_year'])
     
     if not drivers_data:
-        st.info(f"Chưa có dữ liệu xếp hạng tay đua cho mùa giải {st.session_state['selected_year']}.")
+        st.info(f"No data for season {st.session_state['selected_year']}.")
         return
 
-    # Vẽ giao diện Grid 2 cột
     col1, col2 = st.columns(2)
     
     for i, d in enumerate(drivers_data):
@@ -300,14 +312,14 @@ def render():
         logo_b64 = get_team_logo_b64(d["team"])
         team_html = f"<img src='{logo_b64}' class='drv-team-logo'>" if logo_b64 else f"<span class='drv-team-name'>{d['team']}</span>"
         
-        # Lấy ảnh chân dung (Portrait)
+        # Portrait
         if st.session_state['selected_year'] == 2026:
             portrait_b64 = get_driver_image_b64(d["first_name"], d["last_name"])
             portrait_html = f"<img src='{portrait_b64}' class='drv-portrait'>" if portrait_b64 else ""
         else:
             portrait_html = ""
 
-        # Sinh mã HTML cho thẻ Card
+        # HTML Card
         card_html = f"""<div class='drv-card' style='border-left: 6px solid {team_color};'>
 <div class='drv-info'>
 <div class='drv-main-row'>

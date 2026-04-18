@@ -1,3 +1,11 @@
+"""Strategy Tab Component - Tire Strategy and Stint Analysis
+
+Displays tire strategy information and stint performance analysis:
+- Timeline chart showing tire compound and stint length for each driver
+- Detailed stint performance metrics (fastest lap, average, consistency, degradation)
+- Comparison of driver strategies throughout the race
+"""
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -6,9 +14,22 @@ import plotly.express as px
 @st.fragment
 def fragment_strategy(session):
     """
-    Hiển thị tab Chiến thuật (Strategy) bao gồm:
-    - Biểu đồ dòng thời gian sử dụng lốp (Tire Strategy Timeline).
-    - Phân tích chi tiết từng stint (Stint Performance Analysis) bao gồm độ mòn lốp và tính ổn định.
+    Renders the Strategy tab with tire strategy timeline and stint analysis.
+    
+    Tabs:
+    1. Strategy Overview: Horizontal bar chart showing each driver's tire stints and compounds
+    2. Stint Detail Analysis: Table with detailed metrics for each stint
+    
+    Args:
+        session: FastF1 session object containing lap and tire compound data.
+    
+    Output: Displays strategy charts and analysis tables.
+    
+    Metrics Calculated:
+    - Fastest lap in stint (MM:SS.sss format)
+    - Average lap time (MM:SS.sss format)
+    - Consistency: Standard deviation of lap times (sigma in seconds)
+    - Degradation: Linear regression of lap time vs tire age (s/lap)
     """
     sub_overview, sub_stint = st.tabs(["Strategy Overview", "Stint Detail Analysis"])
     

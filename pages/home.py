@@ -1,3 +1,12 @@
+"""Home Page - F1 Season Overview Dashboard
+
+Displays the current F1 season standings and upcoming race calendar:
+- Constructor and Driver standings (top 4)
+- Upcoming race schedule with details
+- Season year selector
+- Links to full standings pages
+"""
+
 import streamlit as st
 import pandas as pd
 import base64
@@ -38,20 +47,39 @@ TRACK_BGS = {
 
 @st.cache_data(show_spinner=False)
 def get_image_base64(path):
-    """Đọc file ảnh local và mã hóa thành chuẩn Base64 để nhúng vào HTML"""
-    # SỬA LỖI TYPE ERROR: Kiểm tra path phải tồn tại và là chuỗi
+    """Convert local image file to base64 data URL for embedding in HTML.
+    
+    Args:
+        path (str): File path to image (supports .avif, .jpg, .jpeg formats).
+    
+    Returns:
+        str: Data URL string (e.g., 'data:image/avif;base64,...') or None if file not found.
+    
+    Output: Base64 encoded image data suitable for HTML img tags.
+    """
     if path and isinstance(path, str) and os.path.exists(path):
         with open(path, "rb") as f:
             data = f.read()
             b64 = base64.b64encode(data).decode()
             ext = path.split('.')[-1].lower()
-            mime_types = {"avif": "image/avif", "png": "image/png", "jpg": "image/jpeg"}
+            mime_types = {"avif": "image/avif"}
             mime = mime_types.get(ext, "image/jpeg")
             return f"data:{mime};base64,{b64}"
     return None
 
 def get_team_logo_html(team_name):
-    """Trích xuất tên đội đua và load trực tiếp file .avif tương ứng"""
+    """Generate HTML image tag for team logo with fallback to team abbreviation.
+    
+    Searches multiple path patterns and returns formatted HTML img tag or abbreviation badge.
+    
+    Args:
+        team_name (str): Name of the F1 team.
+    
+    Returns:
+        str: HTML img tag with base64 image or fallback div with team abbreviation.
+    
+    Output: Styled HTML element ready for rendering in Streamlit markdown.
+    """
     team_lower = str(team_name).lower().strip()
     
     possible_paths = [
@@ -72,7 +100,22 @@ def get_team_logo_html(team_name):
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_standings(year):
-    """Gọi API lấy dữ liệu bảng xếp hạng thực tế của năm"""
+    """Fetch Driver and Constructor standings from Ergast F1 API.
+    
+    Queries the Jolpi Ergast API for current season standings.
+    
+    Args:
+        year (int): Season year (e.g., 2026, 2025).
+    
+    Returns:
+        tuple: (teams_data list, drivers_data list) each containing top 4 entries with:
+               - 'name': Team/Driver name
+               - 'pts': Championship points
+               - 'trend': Position indicator (e.g., 'P1')
+               - 'logo_html': HTML img tag for team logo
+    
+    Output: Standings data cached for 1 hour (ttl=3600).
+    """
     drivers_data = []
     teams_data = []
     
@@ -116,17 +159,39 @@ def fetch_standings(year):
     return teams_data, drivers_data
 
 def load_bg_image(path_or_url):
-    """Xử lý ảnh nền của Race Card"""
-    # SỬA LỖI TRẢ VỀ RỖNG: Tự động dùng ảnh Default nếu path_or_url = None
+    """Load and convert background image to base64 data URL.
+    
+    Args:
+        path_or_url (str): File path to image or URL.
+    
+    Returns:
+        str: Base64 data URL for background image or default image if not found.
+    
+    Output: Data URL suitable for CSS background-image property.
+    """
     if not path_or_url:
         return TRACK_BGS.get("Default", "")
-        
-    if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
-        return path_or_url
-        
-    return get_image_base64(path_or_url) or TRACK_BGS.get("Default", "")
+    return get_image_base64(path_or_url)
 
 def render():
+    """Render the complete home page dashboard with standings and race calendar.
+    
+    Output: Displays full page with:
+    - Season year selector
+    - Constructor standings (top 4)
+    - Driver standings (top 4)
+    - Upcoming races calendar (this month + next month)
+    - CSS styling for cards, buttons, and responsive layout
+    
+    CSS Sections:
+    - .block-container: Page width and padding constraints
+    - .sec-header, .sec-title: Section headers with accent color
+    - .st-card: Standing position cards with hover effects
+    - .st-info, .st-pts, .st-name, .st-trend: Card content styling
+    - .st-logo: Team logo styling with filter effects
+    - [data-testid="stBaseButton-secondary"]: Race card styling with background images
+    - [data-testid="stBaseButton-primary"]: Action button styling with border and hover
+    """
     st.markdown("""
         <style>
             .block-container { padding-top: 1rem !important; max-width: 95% !important; }
@@ -218,7 +283,6 @@ def render():
 
         api_teams, api_drivers = fetch_standings(st.session_state['selected_year'])
         
-        # Đảm bảo không bị lỗi NameError khi chưa có API
         teams_data = api_teams if api_teams else []
         drivers_data = api_drivers if api_drivers else []
 
@@ -229,10 +293,7 @@ def render():
         with col_t_btn:
             st.write("")
             if st.button("Full Standings →", key="btn_full_team", type="primary", use_container_width=True):
-                try:
-                    st.switch_page("pages/constructors.py")
-                except Exception:
-                    st.toast("Trang Constructors đang được xây dựng!", icon="🚧")
+                st.switch_page("pages/constructors.py")
                     
         if not teams_data:
             st.info("Chưa có dữ liệu cho mùa giải này.")
@@ -254,10 +315,7 @@ def render():
         with col_d_btn:
             st.markdown("<div style='margin-top: 25px;'></div>", unsafe_allow_html=True)
             if st.button("Full Standings →", key="btn_full_driver", type="primary", use_container_width=True):
-                try:
-                    st.switch_page("pages/drivers.py")
-                except Exception:
-                    st.toast("Trang Drivers đang được xây dựng!", icon="🚧")
+                st.switch_page("pages/drivers.py")
                     
         if not drivers_data:
             st.info("Chưa có dữ liệu cho mùa giải này.")
@@ -279,6 +337,7 @@ def render():
         with col_r_btn:
             st.write("")
             if st.button("View All Races →", type="primary", use_container_width=True):
+                st.session_state['play_intro'] = True
                 st.switch_page("pages/race_analytics.py")
         
         events_df = get_schedule(st.session_state['selected_year'])

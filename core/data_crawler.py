@@ -1,3 +1,13 @@
+"""Data Crawler Module - Historical F1 Data Collection
+
+Collects historical F1 race data from FastF1 API for training ML models:
+- Pre-race data: Grid positions, qualifying times, practice performance
+- In-race data: Lap times, lap positions, race progress
+- Handles API rate limiting and connection errors with automatic retries
+
+Data is cached locally to f1_cache directory and processed into CSV files.
+"""
+
 import os
 import time
 import pandas as pd
@@ -23,6 +33,21 @@ fastf1.set_log_level('ERROR')
 # Utility Functions
 # ==========================================
 def safe_load_session(year, round_num, session_code):
+    """Load FastF1 session data with automatic retry on API failures.
+    
+    Implements exponential backoff with 60-second delays between retries
+    when FastF1 API calls fail.
+    
+    Args:
+        year (int): Season year (e.g., 2026, 2025).
+        round_num (int): Round number of the race.
+        session_code (str): Session code ('FP1', 'FP2', 'FP3', 'Q', 'S', 'R').
+    
+    Returns:
+        fastf1.core.Session: Loaded session object with race data.
+    
+    Output: Prints progress messages and error logs with retry attempts.
+    """
     attempt = 1
     while True:
         try:
@@ -38,6 +63,16 @@ def safe_load_session(year, round_num, session_code):
             attempt += 1
 
 def safe_get_schedule(year):
+    """Fetch F1 season calendar with automatic retry on API failures.
+    
+    Args:
+        year (int): Season year (e.g., 2026, 2025).
+    
+    Returns:
+        pd.DataFrame: Season schedule with all races and dates.
+    
+    Output: Prints error logs with retry attempts if API fails.
+    """
     while True:
         try:
             schedule = fastf1.get_event_schedule(year)

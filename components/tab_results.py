@@ -1,28 +1,57 @@
+"""
+Results Tab Component - Race/Qualifying Results Display
+
+Displays the final results of a session:
+- Qualifying: Q1/Q2/Q3 lap times
+- Race: Final positions, gaps, status, and points
+- Formatted time displays for easy readability
+"""
+
 import streamlit as st
 import pandas as pd
 
 @st.fragment
 def fragment_results(session, session_code, session_name):
     """
-    Hiển thị tab Kết quả (Results) cho Race / Qualifying.
+    Renders the Results tab showing final session standings.
+    
+    For Qualifying sessions (Q, SQ):
+    - Displays the best qualifying lap time for each driver
+    
+    For Race sessions (R):
+    - Displays finishing position, time/gap, status, and points awarded
+    - Winner's time shown in absolute format (HH:MM:SS)
+    - Other drivers' times shown as gap from winner (+MM:SS format)
+    
+    Args:
+        session: FastF1 session object containing results data
+        session_code (str): Session type code ('Q'=Qualifying, 'R'=Race, 'SQ'=Sprint Qualifying)
+        session_name (str): Display name for the session (e.g., "Qualifying", "Race")
+    
+    Output: Displays formatted results table with Streamlit dataframe
     """
     st.subheader(f"Results - {session_name}")
     res_df = session.results.copy()
     formatted_times = []
     winner_time = pd.NaT
     
+    # Get winner's time as reference point for gap calculations in races
     if not res_df.empty and pd.notna(res_df.iloc[0]['Time']): 
         winner_time = res_df.iloc[0]['Time']
         
+    # === Format Times Based on Session Type ===
     for index, row in res_df.iterrows():
         pos = row['Position']
         time_val = row['Time']
         status = str(row['Status'])
         
-        if session_code in ['Q', 'SQ']:
+        if session_code in ['Q', 'SQ']:  # QUALIFYING SESSION
+            # Get best qualifying time from Q3, Q2, or Q1 (in that priority order)
             best_q = row.get('Q3', pd.NaT)
-            if pd.isna(best_q): best_q = row.get('Q2', pd.NaT)
-            if pd.isna(best_q): best_q = row.get('Q1', pd.NaT)
+            if pd.isna(best_q): 
+                best_q = row.get('Q2', pd.NaT)
+            if pd.isna(best_q): 
+                best_q = row.get('Q1', pd.NaT)
             
             if pd.notna(best_q):
                 q_sec = best_q.total_seconds()
@@ -30,24 +59,28 @@ def fragment_results(session, session_code, session_name):
             else: 
                 formatted_times.append(status)
                 
-        else:
+        else:  # RACE SESSION
             if pd.isna(time_val): 
+                # No valid time, show status (DNF, DNP, etc.)
                 formatted_times.append(status)
             elif pos == 1 or pd.isna(winner_time):
+                # Winner's time in absolute format HH:MM:SS
                 ts = time_val.total_seconds()
                 formatted_times.append(f"{int(ts // 3600):02d}:{int((ts % 3600) // 60):02d}:{int(ts % 60):02d}")
             else:
+                # Other drivers' time as gap from winner (+MM:SS format)
                 gap = time_val.total_seconds()
                 formatted_times.append(f"+{int(gap // 60):02d}:{int(gap % 60):02d}")
     
+    # === Create Display DataFrame ===
     display_df = pd.DataFrame({
         'Pos': res_df['Position'].astype(str).str.replace('.0', '', regex=False),
-        'Driver': res_df['FullName'], 
-        'Team': res_df['TeamName'],
-        'Grid': res_df['GridPosition'].astype(str).str.replace('.0', '', regex=False),
-        'Status': res_df['Status'], 
-        'Time': formatted_times,
-        'Points': res_df['Points'].astype(str).str.replace('.0', '', regex=False)
+        'Driver': res_df['FullName'],  # Full name of driver
+        'Team': res_df['TeamName'],     # Team name
+        'Grid': res_df['GridPosition'].astype(str).str.replace('.0', '', regex=False),  # Starting position
+        'Status': res_df['Status'],     # Finished, DNF, etc.
+        'Time': formatted_times,        # Time or gap
+        'Points': res_df['Points'].astype(str).str.replace('.0', '', regex=False)  # Championship points
     })
     
     st.dataframe(display_df.replace('nan', 'N/A'), width='stretch', hide_index=True)

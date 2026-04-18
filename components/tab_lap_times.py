@@ -1,28 +1,47 @@
+"""
+Lap Times Tab Component - Driver Lap Time Comparison
+
+Displays a Streamlit fragment that allows users to:
+- Select and compare lap times across up to 6 drivers
+- Add/remove drivers dynamically from comparison
+- Visualize lap-by-lap performance using interactive charts
+"""
+
 import streamlit as st
 import plotly.graph_objects as go
 
 @st.fragment
 def fragment_lap_times(session, drivers):
     """
-    Hiển thị tab Phân tích Thời gian vòng chạy (Lap Times) bao gồm:
-    - Biểu đồ so sánh thời gian qua từng vòng giữa các tay đua.
-    - Cấu trúc quản lý state để thêm/bớt linh hoạt các tay đua cần so sánh (tối đa 6 tay đua).
+    Renders the Lap Times Comparison tab with interactive driver selection.
+    
+    Features:
+    - Add/Remove drivers dynamically (max 6 drivers)
+    - Responsive grid layout (3 columns)
+    - Interactive Plotly chart showing lap times
+    
+    Args:
+        session: FastF1 session object containing lap data
+        drivers (list): List of driver abbreviations available in the session
+    
+    Output: Displays Streamlit UI with lap time comparison chart
     """
-    # Khởi tạo Session State cho việc quản lý các ô chọn tay đua
+    # === Initialize Session State for Dynamic Driver Selection ===
     if 'lt_boxes' not in st.session_state: 
-        st.session_state['lt_boxes'] = ['box_0', 'box_1'] 
+        st.session_state['lt_boxes'] = ['box_0', 'box_1']  # Start with 2 drivers
     if 'lt_box_counter' not in st.session_state: 
         st.session_state['lt_box_counter'] = 2
         
     boxes = st.session_state['lt_boxes']
     n = len(boxes)
     
-    # Header và Nút thêm tay đua
+    # === Header and Add Driver Button ===
     c_title, c_add = st.columns([4, 1])
     with c_title: 
         st.subheader("Lap Time Comparison")
     
     def add_driver():
+        """Callback: Add a new driver selectbox (up to 6 total)"""
         st.session_state['lt_boxes'].append(f"box_{st.session_state['lt_box_counter']}")
         st.session_state['lt_box_counter'] += 1
         
@@ -31,7 +50,7 @@ def fragment_lap_times(session, drivers):
 
     sel_drivers = []
     
-    # Xây dựng lưới (grid) linh hoạt với tối đa 3 cột trên 1 hàng
+    # === Dynamic Grid Layout - Max 3 Columns per Row ===
     for i in range(0, n, 3):
         cols = st.columns(3)
         for j in range(3):
@@ -39,13 +58,14 @@ def fragment_lap_times(session, drivers):
             if idx < n:
                 b_id = boxes[idx]
                 with cols[j]:
-                    # Nếu có từ 3 tay đua trở lên, hiện nút "✖" (xóa) bên cạnh
+                    # Show delete button (X) when 3+ drivers selected
                     if n >= 3:
                         sc1, sc2 = st.columns([4, 1])
                         with sc1: 
                             drv = st.selectbox("Driver", drivers, index=idx % len(drivers), key=f"sel_{b_id}", label_visibility="collapsed")
                         with sc2: 
                             def remove_driver(box_id=b_id):
+                                """Callback: Remove a driver from comparison"""
                                 st.session_state['lt_boxes'].remove(box_id)
                             st.button("✖", key=f"del_{b_id}", on_click=remove_driver)
                     else: 

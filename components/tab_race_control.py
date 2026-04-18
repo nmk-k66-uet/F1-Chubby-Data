@@ -1,11 +1,30 @@
+"""Race Control Tab Component - Event Timeline and Messages
+
+Displays all race control messages (flags, penalties, safety car, etc.):
+- Event timeline with categories and flags
+- Interactive filtering by category or flag type
+- Event card display with color-coded flags
+- Responsive scrollable event list
+"""
+
 import streamlit as st
 import pandas as pd
 
 @st.fragment
 def fragment_race_control(session):
     """
-    Hiển thị tab Race Control dưới dạng danh sách các thẻ sự kiện (Event Cards),
-    cho phép lọc theo Category hoặc loại Cờ (Flag).
+    Renders the Race Control Timeline tab showing all official race events.
+    
+    Features:
+    - Filters events by Category (Flag, Other, SafetyCar, SessionStatus)
+    - Filters events by Flag type (Yellow, Red, Green, Blue, etc.)
+    - Displays events in scrollable cards with color-coding
+    - Shows total event count (filtered/total)
+    
+    Args:
+        session: FastF1 session object with race_control_messages attribute.
+    
+    Output: Displays filtered race control event timeline with UI controls.
     """
     try:
         rcm_df = session.race_control_messages.copy()

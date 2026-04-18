@@ -7,10 +7,56 @@ import streamlit.components.v1 as components
 
 CACHE_DIR = 'f1_cache'
 
+"""Replay Engine Component - Interactive Race Replay Visualization
+
+Provides a native JavaScript-based race replay engine showing:
+- Live car positions and lap-by-lap movements on track map
+- Race control messages and events timeline
+- Real-time telemetry during replay (speed, throttle, brake, gear)
+- Interactive playback controls
+
+Data is generated from FastF1 telemetry and cached for performance.
+"""
+
+import streamlit as st
+import pandas as pd
+import json
+import os
+import time
+import streamlit.components.v1 as components
+
+CACHE_DIR = 'f1_cache'
+
 # ==========================================
 # LAZY-LOADED REPLAY ENGINE (NATIVE JS)
 # ==========================================
 def generate_and_cache_replay_payload(session, max_lap_avail, cache_path):
+    """
+    Generates and caches replay data payload from FastF1 session.
+    
+    This function extracts all necessary data from a race session to enable
+    interactive replay visualization, including:
+    - Track geometry and corner positions
+    - Race control messages and flags
+    - Car positions and telemetry for each lap
+    
+    Args:
+        session: FastF1 session object with complete race data.
+        max_lap_avail (int): Maximum lap number to process.
+        cache_path (str): File path to save the cached JSON payload.
+    
+    Output: Creates JSON file with replay payload at cache_path
+            Shows progress bar during data extraction (4 phases).
+    
+    Payload Structure:
+    - frames: Array of lap telemetry frames for each driver
+    - laps_info: Lap timing information
+    - messages: Race control messages and flags
+    - colors: Team colors for each driver
+    - track_path: Track centerline coordinates [X, Y]
+    - corners: Track corner positions and vectors
+    - max_lap, min_x, max_x, min_y, max_y: Bounds information
+    """
     st.info("Extracting data... This usually takes 1-2 minutes. Please do not switch tabs.")
     progress_bar = st.progress(0.0)
     status_text = st.empty()

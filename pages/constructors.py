@@ -1,10 +1,20 @@
+"""Constructors Page - Team Details and Performance Analysis
+
+Detailed view of individual team/constructor performance:
+- Team selection interface
+- Race-by-race results for team drivers
+- In-race analytics and comparative telemetry
+- Live race predictions and team strategy analysis
+- Interactive replay engine
+
+"""
+
 import streamlit as st
 import pandas as pd
 import requests
 import base64
 import os
 
-# Cấu hình màu sắc đặc trưng của các đội đua
 TEAM_COLORS = {
     "red bull": "#3671C6", "mercedes": "#00D2BE", "ferrari": "#DC0000",
     "mclaren": "#FF8000", "aston martin": "#229971", "alpine": "#0090FF",
@@ -20,13 +30,12 @@ def get_image_base64(path):
             data = f.read()
             b64 = base64.b64encode(data).decode()
             ext = path.split('.')[-1].lower()
-            mime_types = {"avif": "image/avif", "png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}
+            mime_types = {"avif": "image/avif"}
             mime = mime_types.get(ext, "image/png")
             return f"data:{mime};base64,{b64}"
     return None
 
 def get_team_logo_b64(team_name):
-    """Tìm ảnh logo đội đua trong thư mục assets/teams/"""
     team_lower = str(team_name).lower().strip()
     possible_paths = [
         f"assets/teams/{team_name}.avif", f"assets/teams/{team_lower}.avif", f"assets/teams/{team_lower.replace(' ', '')}.avif",
@@ -41,7 +50,6 @@ def get_car_image_b64(team_name, year):
     """Tìm ảnh xe đua trong thư mục assets/Cars/"""
     name_norm = str(team_name).lower().strip()
     
-    # Rút gọn tên đội đua để map với file trong máy của bạn
     file_key = name_norm.replace(" ", "")
     if "red bull" in name_norm: file_key = "redbull"
     elif "haas" in name_norm: file_key = "haasf1team"
@@ -106,6 +114,15 @@ def fetch_constructors_data(year):
     return teams_data
 
 def render():
+    """Render the complete team/constructor details page with race data tabs.
+    
+    Output: Displays team selection interface and multiple tabs for:
+    - Results: Qualifying and race results for both team drivers
+    - Lap Times: Lap-by-lap timing comparison between drivers
+    - Telemetry: Speed, throttle, brake, RPM, and DRS data comparison
+    - Live Race: Real-time race predictions and team strategy analysis
+    - Replay: Interactive race replay with team focus
+    """
     if 'selected_year' not in st.session_state: 
         st.session_state['selected_year'] = 2026
 

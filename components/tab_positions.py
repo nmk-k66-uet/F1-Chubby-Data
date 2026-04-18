@@ -1,3 +1,11 @@
+"""Positions Tab Component - Lap-by-Lap Position Changes and Analysis
+
+Displays position changes throughout the race session:
+- Line chart showing each driver's position progression lap-by-lap
+- Race control messages and events timeline
+- Analysis of position changes (gained/lost positions per driver)
+"""
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -6,10 +14,20 @@ from components.tab_race_control import fragment_race_control
 @st.fragment
 def fragment_positions(session, drivers, session_name):
     """
-    Hiển thị tab phân tích Vị trí (Positions) bao gồm:
-    - Biểu đồ thay đổi vị trí qua từng vòng
-    - Bảng thông báo từ Race Control
-    - Phân tích vị trí đạt được/đánh mất (Gained/Lost)
+    Renders the Positions tab with lap-by-lap position tracking and analysis.
+    
+    Features:\n    - Position chart: Line plot showing each driver's position over laps
+    - Driver selection with Select All toggle
+    - Team-based line styling (solid for primary driver, dashed for second driver)
+    - Race control timeline tab
+    - Position change analysis tab
+    
+    Args:
+        session: FastF1 session object with lap and position data.
+        drivers (list): List of driver abbreviations available in session.
+        session_name (str): Name of the session (e.g., 'Race', 'Qualifying').
+    
+    Output: Displays three tabs with position charts, race control messages, and analysis.
     """
     sub_chart, sub_rc, sub_analysis = st.tabs(["Position Chart", "Race Control", "Analysis"])
     
