@@ -268,14 +268,16 @@ def render():
     """, unsafe_allow_html=True)
 
     col_hdr1, col_hdr2 = st.columns([4, 1])
+
+    
+    with col_hdr2:
+        years_list = [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018]
+        safe_index = years_list.index(st.session_state['selected_year']) if st.session_state['selected_year'] in years_list else 0
+        st.session_state['selected_year'] = st.selectbox("Season", years_list, index=safe_index, label_visibility="collapsed")
+
     with col_hdr1:
         if 'selected_year' not in st.session_state: st.session_state['selected_year'] = 2026
         st.markdown(f"<h2 style='margin-top: 0;'>Season Overview {st.session_state['selected_year']}</h2>", unsafe_allow_html=True)
-    
-    with col_hdr2:
-        years_list = [2026, 2025, 2024, 2023, 2022]
-        safe_index = years_list.index(st.session_state['selected_year']) if st.session_state['selected_year'] in years_list else 0
-        st.session_state['selected_year'] = st.selectbox("Season", years_list, index=safe_index, label_visibility="collapsed")
 
     col_left, col_right = st.columns([6.5, 3.5], gap="large")
 
