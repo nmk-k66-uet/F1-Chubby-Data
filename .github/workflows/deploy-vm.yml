@@ -1,0 +1,49 @@
+name: Deploy VM Services
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'model_serving/**'
+      - 'docker-compose.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: gen-lang-client-0126315221
+  ZONE: asia-southeast1-b
+  VM_NAME: f1-chubby-vm
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SA_EMAIL }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Copy files to VM
+        run: |
+          gcloud compute scp --recurse \
+            docker-compose.yml model_serving/ \
+            ${{ env.VM_NAME }}:~/app/ \
+            --zone ${{ env.ZONE }} \
+            --quiet
+
+      - name: Deploy services on VM
+        run: |
+          gcloud compute ssh ${{ env.VM_NAME }} \
+            --zone ${{ env.ZONE }} \
+            --quiet \
+            --command "cd ~/app && docker compose pull && docker compose up -d --remove-orphans"

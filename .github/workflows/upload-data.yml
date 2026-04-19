@@ -1,0 +1,66 @@
+name: Upload Data to GCS
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'What to upload'
+        required: true
+        type: choice
+        options:
+          - raw-data
+          - replay-cache
+          - models
+          - all
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: gen-lang-client-0126315221
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SA_EMAIL }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Upload raw data
+        if: inputs.target == 'raw-data' || inputs.target == 'all'
+        run: |
+          if [ -d "f1_cache" ]; then
+            gsutil -m cp -r f1_cache/* gs://f1chubby-raw-${{ env.PROJECT_ID }}/
+          else
+            echo "No f1_cache directory found, skipping raw data upload"
+          fi
+
+      - name: Upload replay cache
+        if: inputs.target == 'replay-cache' || inputs.target == 'all'
+        run: |
+          if [ -d "replay_cache" ]; then
+            gsutil -m cp -r replay_cache/* gs://f1chubby-replay-${{ env.PROJECT_ID }}/
+          else
+            echo "No replay_cache directory found, skipping"
+          fi
+
+      - name: Upload model artifacts
+        if: inputs.target == 'models' || inputs.target == 'all'
+        run: |
+          if [ -d "model_serving/models" ]; then
+            gsutil -m cp -r model_serving/models/* gs://f1chubby-models-${{ env.PROJECT_ID }}/
+          else
+            echo "No model artifacts found, skipping"
+          fi

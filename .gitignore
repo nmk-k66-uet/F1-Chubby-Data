@@ -216,3 +216,22 @@ f1_cache/2026
 f1_cache/fastf1_http_cache.sqlite
 
 assets/gemini_key.txt
+
+shell.nix
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+.terraform.lock.hcl
+.direnv
+

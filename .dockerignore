@@ -1,0 +1,16 @@
+.git/
+.gitignore
+__pycache__/
+*.pyc
+f1_cache/
+infra/
+spark/
+model_serving/
+Legacy Functions/
+schemas/
+*.md
+*.mmd
+*.docx
+.github/
+.venv/
+.env
