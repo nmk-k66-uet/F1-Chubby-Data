@@ -138,6 +138,11 @@ celerybeat.pid
 .env
 .envrc
 .venv
+
+# Model artifacts (stored in GCS, not git)
+assets/Models/*.pkl
+model_serving/models/*.pkl
+model_serving/models/*.joblib
 env/
 venv/
 ENV/
