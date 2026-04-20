@@ -1,0 +1,67 @@
+name: Deploy Streamlit to Cloud Run
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'main.py'
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - 'core/**'
+      - 'components/**'
+      - 'pages/**'
+      - 'assets/**'
+      - '.streamlit/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: gen-lang-client-0126315221
+  REGION: asia-southeast1
+  REPO: f1-chubby
+  IMAGE: f1-dashboard
+  SERVICE: f1-dashboard
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SA_EMAIL }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and Push Image
+        run: |
+          IMAGE_URI="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE }}:${{ github.sha }}"
+          docker build -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE }} \
+            --image "$IMAGE_URI" \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --min-instances 0 \
+            --max-instances 2 \
+            --port 8501 \
+            --set-env-vars "CLOUDSQL_CONNECTION=${{ secrets.CLOUDSQL_CONNECTION }}" \
+            --set-env-vars "INFLUXDB_URL=${{ secrets.INFLUXDB_URL }}" \
+            --set-env-vars "INFLUXDB_TOKEN=${{ secrets.INFLUXDB_TOKEN }}" \
+            --set-env-vars "MODEL_API_URL=${{ secrets.MODEL_API_URL }}"

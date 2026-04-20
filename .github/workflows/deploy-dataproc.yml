@@ -1,0 +1,87 @@
+name: Deploy Dataproc Jobs
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_type:
+        description: 'Which Spark job to submit'
+        required: true
+        type: choice
+        options:
+          - batch
+          - streaming-fast
+          - streaming-slow
+          - all
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: gen-lang-client-0126315221
+  REGION: asia-southeast1
+  ZONE: asia-southeast1-b
+  CLUSTER_NAME: f1-chubby-spark
+  STAGING_BUCKET: f1chubby-dataproc-staging-gen-lang-client-0126315221
+
+jobs:
+  submit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SA_EMAIL }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Upload Spark jobs to GCS
+        run: |
+          gsutil cp spark/*.py gs://${{ env.STAGING_BUCKET }}/spark/
+
+      - name: Create Dataproc cluster
+        run: |
+          gcloud dataproc clusters create ${{ env.CLUSTER_NAME }} \
+            --region ${{ env.REGION }} \
+            --zone ${{ env.ZONE }} \
+            --single-node \
+            --master-machine-type n1-standard-4 \
+            --master-boot-disk-size 50GB \
+            --image-version 2.1-debian11 \
+            --max-idle 600s \
+            --project ${{ env.PROJECT_ID }} \
+            --bucket ${{ env.STAGING_BUCKET }} || true
+
+      - name: Submit Batch Job
+        if: inputs.job_type == 'batch' || inputs.job_type == 'all'
+        run: |
+          gcloud dataproc jobs submit pyspark \
+            gs://${{ env.STAGING_BUCKET }}/spark/batch_pipeline.py \
+            --cluster ${{ env.CLUSTER_NAME }} \
+            --region ${{ env.REGION }} \
+            --project ${{ env.PROJECT_ID }}
+
+      - name: Submit Streaming Fast Path
+        if: inputs.job_type == 'streaming-fast' || inputs.job_type == 'all'
+        run: |
+          gcloud dataproc jobs submit pyspark \
+            gs://${{ env.STAGING_BUCKET }}/spark/streaming_fast.py \
+            --cluster ${{ env.CLUSTER_NAME }} \
+            --region ${{ env.REGION }} \
+            --project ${{ env.PROJECT_ID }} \
+            --async
+
+      - name: Submit Streaming Slow Path
+        if: inputs.job_type == 'streaming-slow' || inputs.job_type == 'all'
+        run: |
+          gcloud dataproc jobs submit pyspark \
+            gs://${{ env.STAGING_BUCKET }}/spark/streaming_slow.py \
+            --cluster ${{ env.CLUSTER_NAME }} \
+            --region ${{ env.REGION }} \
+            --project ${{ env.PROJECT_ID }} \
+            --async
