@@ -1,25 +1,88 @@
 """
 Live Race Tab Component - Real-time Race Updates and Analysis
 
-This component displays live race data during an active race session:
-- Live timing with lap-by-lap updates
-- Win probability calculations based on track position and pace
-- Momentum indicators showing probability trends
-- Performance radar charts comparing drivers
-- Sparkline charts showing probability history
+Data sources:
+  - InfluxDB `predictions` measurement (production: Spark slow path writes here)
+  - Model Serving API HTTP fallback (LOCAL_MODE or when InfluxDB has no data)
+  - FastF1 session.laps for historical replay simulation
 
-Updates every 3 seconds using @st.fragment(run_every=3)
+Does NOT import ml_core or joblib.
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import time
 import os
-import joblib
+import time
+import requests as _requests
 import altair as alt
 import plotly.graph_objects as go
-from core.ml_core import predict_live_lap
+
+MODEL_API_URL = os.environ.get("MODEL_API_URL", "http://model-api:8080")
+INFLUXDB_URL = os.environ.get("INFLUXDB_URL", "http://influxdb:8086")
+INFLUXDB_TOKEN = os.environ.get("INFLUXDB_TOKEN", "")
+INFLUXDB_ORG = os.environ.get("INFLUXDB_ORG", "f1chubby")
+INFLUXDB_BUCKET = os.environ.get("INFLUXDB_BUCKET", "live_race")
+LOCAL_MODE = os.environ.get("LOCAL_MODE", "false").lower() in ("1", "true", "yes")
+
+
+def _predict_via_api(live_lap_df):
+    """Call Model Serving API for in-race predictions. Returns df with Live_Win_Prob, Live_Podium_Prob."""
+    try:
+        drivers_payload = []
+        for _, row in live_lap_df.iterrows():
+            drivers_payload.append({
+                "driver": str(row.get("Driver", "")),
+                "LapFraction": float(row.get("LapFraction", 0)),
+                "CurrentPosition": float(row.get("CurrentPosition", 20)),
+                "GapToLeader": float(row.get("GapToLeader", 0)),
+                "TyreLife": float(row.get("TyreLife", 0)),
+                "CompoundIdx": float(row.get("CompoundIdx", 1)),
+                "IsPitOut": float(row.get("IsPitOut", 0)),
+            })
+        resp = _requests.post(f"{MODEL_API_URL}/predict-inrace", json={"drivers": drivers_payload}, timeout=5)
+        resp.raise_for_status()
+        preds = {p["driver"]: p for p in resp.json()["predictions"]}
+
+        live_lap_df["Live_Win_Prob"] = live_lap_df["Driver"].map(lambda d: preds.get(d, {}).get("win_prob", 0))
+        live_lap_df["Live_Podium_Prob"] = live_lap_df["Driver"].map(lambda d: preds.get(d, {}).get("podium_prob", 0))
+        return live_lap_df.sort_values(by=["Live_Win_Prob", "Live_Podium_Prob"], ascending=[False, False])
+    except Exception:
+        # Static fallback
+        live_lap_df["Live_Win_Prob"] = [0.65, 0.22, 0.05, 0.04, 0.04] + [0] * max(0, len(live_lap_df) - 5)
+        live_lap_df["Live_Podium_Prob"] = [0.95, 0.85, 0.78, 0.40, 0.02] + [0] * max(0, len(live_lap_df) - 5)
+        return live_lap_df
+
+
+def _fetch_predictions_from_influxdb(race_id, lap_number):
+    """Query InfluxDB for pre-computed predictions. Returns list of dicts or None."""
+    if not INFLUXDB_TOKEN or LOCAL_MODE:
+        return None
+    try:
+        from influxdb_client import InfluxDBClient
+        client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG)
+        query_api = client.query_api()
+        flux = f'''
+        from(bucket: "{INFLUXDB_BUCKET}")
+          |> range(start: -5m)
+          |> filter(fn: (r) => r._measurement == "predictions" and r.race_id == "{race_id}")
+          |> last()
+          |> pivot(rowKey:["_time", "driver"], columnKey: ["_field"], valueColumn: "_value")
+        '''
+        tables = query_api.query(flux)
+        results = []
+        for table in tables:
+            for record in table.records:
+                results.append({
+                    "driver": record.values.get("driver", ""),
+                    "win_prob": record.values.get("win_prob", 0),
+                    "podium_prob": record.values.get("podium_prob", 0),
+                    "timestamp": record.get_time(),
+                })
+        client.close()
+        return results if results else None
+    except Exception:
+        return None
 
 def format_lap_time(td):
     """
@@ -247,13 +310,22 @@ def fragment_live_race(session):
     with col_predict:
         st.markdown("<h3 style='margin-top:0;'>Live Predictor</h3>", unsafe_allow_html=True)
         
-        # Chạy Model 
+        # Chạy Model (via API or InfluxDB)
         try:
-            win_model = joblib.load('assets/Models/in_race_win_model.pkl')
-            podium_model = joblib.load('assets/Models/in_race_podium_model.pkl')
-            scored_df = predict_live_lap((win_model, podium_model), live_lap_df)
+            # Try InfluxDB first (production: slow path writes predictions here)
+            race_id = f"{year}_{event}"
+            influx_preds = _fetch_predictions_from_influxdb(race_id, current_lap)
+            if influx_preds:
+                pred_map = {p["driver"]: p for p in influx_preds}
+                scored_df = live_lap_df.copy()
+                scored_df["Live_Win_Prob"] = scored_df["Driver"].map(lambda d: pred_map.get(d, {}).get("win_prob", 0))
+                scored_df["Live_Podium_Prob"] = scored_df["Driver"].map(lambda d: pred_map.get(d, {}).get("podium_prob", 0))
+                scored_df = scored_df.sort_values(by=["Live_Win_Prob", "Live_Podium_Prob"], ascending=[False, False])
+            else:
+                # Fallback: call Model Serving API directly
+                scored_df = _predict_via_api(live_lap_df)
         except:
-            # Fallback nếu lỗi đường dẫn
+            # Static fallback
             scored_df = live_lap_df.copy()
             scored_df['Live_Win_Prob'] = [0.65, 0.22, 0.05, 0.04, 0.04] + [0]*(len(scored_df)-5)
             scored_df['Live_Podium_Prob'] = [0.95, 0.85, 0.78, 0.40, 0.02] + [0]*(len(scored_df)-5)

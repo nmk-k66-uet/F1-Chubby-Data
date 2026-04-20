@@ -1,19 +1,71 @@
 """
 Pre-Race Predictor UI Component - Podium Probability Analysis
 
-This component provides:
-- AI-powered podium probability predictions using Random Forest model
-- Setup Profiler visualization (Downforce vs. Drag analysis)
-- AI-generated tactical analysis using Google Gemini
-- Model retraining capability with fresh data
+Data sources:
+  - Model Serving API (POST /predict-prerace) for podium probabilities
+  - FastF1 session telemetry for Setup Profiler
+  - Google Gemini for AI tactical analysis
+
+Does NOT import ml_core or joblib.
 """
 
 import streamlit as st
 import os
 import pandas as pd
+import numpy as np
+import requests as _requests
 import plotly.express as px
 from google import genai
-from core import ml_core
+
+MODEL_API_URL = os.environ.get("MODEL_API_URL", "http://model-api:8080")
+
+# Team tier mapping (same logic as ml_core.get_team_tier)
+_TIER_MAP = {
+    "red bull": 1, "ferrari": 1, "mclaren": 1, "mercedes": 1,
+    "aston martin": 2, "alpine": 2, "williams": 2, "rb": 2,
+    "racing bulls": 2, "haas": 3, "sauber": 3, "kick": 3,
+    "alfa romeo": 3, "alphatauri": 3, "audi": 3, "cadillac": 3,
+}
+
+def _get_team_tier(team_name):
+    team_lower = str(team_name).lower()
+    for key, tier in _TIER_MAP.items():
+        if key in team_lower:
+            return tier
+    return 3
+
+def _build_prerace_features(session, year, round_num):
+    """Extract pre-race features from a loaded FastF1 session for the Model API."""
+    try:
+        results = session.results
+        if results is None or results.empty:
+            return None
+
+        features = []
+        for _, row in results.iterrows():
+            drv = str(row.get("Abbreviation", ""))
+            grid_pos = pd.to_numeric(row.get("GridPosition", row.get("Position")), errors="coerce")
+            if pd.isna(grid_pos) or grid_pos == 0:
+                grid_pos = 20
+            team_name = str(row.get("TeamName", ""))
+            tier = _get_team_tier(team_name)
+            color = f"#{row['TeamColor']}" if 'TeamColor' in row.index and str(row.get('TeamColor', 'nan')) != 'nan' else '#FFFFFF'
+
+            features.append({
+                "driver": drv,
+                "full_name": str(row.get("FullName", drv)),
+                "team": team_name,
+                "color": color,
+                "GridPosition": int(grid_pos),
+                "TeamTier": tier,
+                "QualifyingDelta": 0.0,  # simplified — full feature eng done by batch pipeline
+                "FP2_PaceDelta": 0.0,
+                "DriverForm": 0.5,
+            })
+        return features
+    except Exception:
+        return None
+
 
 @st.fragment
 def render_predictor_tab(session, year, round_num, event_name):
@@ -56,27 +108,46 @@ def render_predictor_tab(session, year, round_num, event_name):
         gemini_client = genai.Client(api_key=gemini_key)
     
     # === CONTROL BUTTONS ===
-    col_btn1, col_btn2 = st.columns([1, 1])
-    with col_btn1:
-        # Button to run predictions and generate analysis
-        run_ai = st.button("Generate Predictions & Analysis", type="primary", width='stretch')
-    with col_btn2:
-        # Button to retrain model with fresh data
-        retrain_ai = st.button("Retrain Model (If fresh data exists)", width='stretch')
-        
-    if retrain_ai:
-        with st.spinner("Retraining the model from historical data..."):
-            ml_core.initialize_model(force_retrain=True)
-            st.success("Model retrained successfully!")
+    run_ai = st.button("Generate Predictions & Analysis", type="primary", width='stretch')
             
     # === PREDICTION EXECUTION LOGIC ===
     if run_ai:
         with st.spinner("Running simulations and generating technical insights..."):
             try:
-                # 1. LOAD AND RUN ML MODEL
-                model = ml_core.initialize_model(force_retrain=False) 
-                inference_df = ml_core.prepare_race_features(year, round_num) 
-                preds_df = ml_core.predict_podium_probabilities(model, inference_df) 
+                # 1. CALL MODEL SERVING API FOR PRE-RACE PREDICTIONS
+                # Build features from FastF1 session data
+                import fastf1
+                grid_features = _build_prerace_features(session, year, round_num)
+                
+                if grid_features:
+                    # Call Model Serving API
+                    resp = _requests.post(
+                        f"{MODEL_API_URL}/predict-prerace",
+                        json={"drivers": grid_features},
+                        timeout=15,
+                    )
+                    resp.raise_for_status()
+                    api_preds = {p["driver"]: p["podium_prob"] for p in resp.json()["predictions"]}
+                    
+                    # Build preds_df matching the old format
+                    preds_rows = []
+                    for feat in grid_features:
+                        drv = feat["driver"]
+                        preds_rows.append({
+                            "Driver": drv,
+                            "FullName": feat.get("full_name", drv),
+                            "Team": feat.get("team", ""),
+                            "GridPosition": int(feat["GridPosition"]),
+                            "TeamTier": int(feat["TeamTier"]),
+                            "QualifyingDelta": feat["QualifyingDelta"],
+                            "FP2_PaceDelta": feat["FP2_PaceDelta"],
+                            "DriverForm": feat["DriverForm"],
+                            "Color": feat.get("color", "#FFFFFF"),
+                            "Podium_Probability": api_preds.get(drv, 0),
+                        })
+                    preds_df = pd.DataFrame(preds_rows).sort_values("Podium_Probability", ascending=False)
+                else:
+                    raise ValueError("Could not build pre-race features from session data")
                 
                 st.session_state['predictions_df'] = preds_df
                 st.session_state['predictions_race_id'] = current_race_id

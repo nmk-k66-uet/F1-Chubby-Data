@@ -11,10 +11,10 @@ import streamlit as st
 import pandas as pd
 import base64
 import os
-import requests
 from datetime import datetime
 from core.data_loader import get_schedule, get_race_winner
 from core.config import get_flag_url
+from core import db
 
 TRACK_BGS = {
     "Bahrain Grand Prix": "assets/BGS/Bahrain Grand Prix.avif",
@@ -100,28 +100,50 @@ def get_team_logo_html(team_name):
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_standings(year):
-    """Fetch Driver and Constructor standings from Ergast F1 API.
-    
-    Queries the Jolpi Ergast API for current season standings.
-    
-    Args:
-        year (int): Season year (e.g., 2026, 2025).
-    
-    Returns:
-        tuple: (teams_data list, drivers_data list) each containing top 4 entries with:
-               - 'name': Team/Driver name
-               - 'pts': Championship points
-               - 'trend': Position indicator (e.g., 'P1')
-               - 'logo_html': HTML img tag for team logo
-    
-    Output: Standings data cached for 1 hour (ttl=3600).
-    """
+    """Fetch Driver and Constructor standings from PostgreSQL, fallback to Ergast API."""
     drivers_data = []
     teams_data = []
-    
+
+    # --- Try PostgreSQL first ---
+    d_rows = db.query(
+        "SELECT full_name, team_name, points, position FROM driver_standings "
+        "WHERE year=%s AND round=(SELECT MAX(round) FROM driver_standings WHERE year=%s) "
+        "ORDER BY position LIMIT 4",
+        (year, year),
+    )
+    c_rows = db.query(
+        "SELECT constructor_name, points, position FROM constructor_standings "
+        "WHERE year=%s AND round=(SELECT MAX(round) FROM constructor_standings WHERE year=%s) "
+        "ORDER BY position LIMIT 4",
+        (year, year),
+    )
+
+    if d_rows:
+        for d in d_rows:
+            drivers_data.append({
+                "name": d["full_name"],
+                "pts": str(int(d["points"])) if d["points"] == int(d["points"]) else str(d["points"]),
+                "trend": f"P{d['position']}",
+                "logo_html": get_team_logo_html(d["team_name"]),
+            })
+
+    if c_rows:
+        for c in c_rows:
+            teams_data.append({
+                "name": c["constructor_name"],
+                "pts": str(int(c["points"])) if c["points"] == int(c["points"]) else str(c["points"]),
+                "trend": f"P{c['position']}",
+                "logo_html": get_team_logo_html(c["constructor_name"]),
+            })
+
+    if drivers_data or teams_data:
+        return teams_data, drivers_data
+
+    # --- Fallback: Ergast API ---
+    import requests as _requests
     try:
         dr_url = f"https://api.jolpi.ca/ergast/f1/{year}/driverStandings.json"
-        dr_res = requests.get(dr_url, timeout=5).json()
+        dr_res = _requests.get(dr_url, timeout=5).json()
         dr_lists = dr_res.get('MRData', {}).get('StandingsTable', {}).get('StandingsLists', [])
         
         if dr_lists:
@@ -138,7 +160,7 @@ def fetch_standings(year):
                 })
                 
         cr_url = f"https://api.jolpi.ca/ergast/f1/{year}/constructorStandings.json"
-        cr_res = requests.get(cr_url, timeout=5).json()
+        cr_res = _requests.get(cr_url, timeout=5).json()
         cr_lists = cr_res.get('MRData', {}).get('StandingsTable', {}).get('StandingsLists', [])
         
         if cr_lists:
@@ -267,6 +289,9 @@ def render():
         </style>
     """, unsafe_allow_html=True)
 
+    if 'selected_year' not in st.session_state:
+        st.session_state['selected_year'] = 2026
+
     col_hdr1, col_hdr2 = st.columns([4, 1])
 
     
@@ -276,7 +301,6 @@ def render():
         st.session_state['selected_year'] = st.selectbox("Season", years_list, index=safe_index, label_visibility="collapsed")
 
     with col_hdr1:
-        if 'selected_year' not in st.session_state: st.session_state['selected_year'] = 2026
         st.markdown(f"<h2 style='margin-top: 0;'>Season Overview {st.session_state['selected_year']}</h2>", unsafe_allow_html=True)
 
     col_left, col_right = st.columns([6.5, 3.5], gap="large")
