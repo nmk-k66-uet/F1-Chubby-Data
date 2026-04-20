@@ -61,15 +61,15 @@ Write Terraform config in `infra/` directory that provisions all GCP resources f
   - `database/` — Cloud SQL PostgreSQL instance, `db-f1-micro`, activation policy `NEVER` by default (start manually)
   - `compute/` — GCE VM `e2-medium`, startup script installs Docker + docker-compose
   - `dataproc/` — Cluster template configs (single-node `n1-standard-4`, auto-delete)
-  - `cloudrun/` — Cloud Run service definition for Streamlit container
+  - `registry/` — Artifact Registry (Docker image storage for VM services)
 - Backend: Terraform Cloud (free tier), workspace `f1-chubby-data`
 - Authentication: Workload Identity Federation (OIDC) — no stored GCP service account keys
 - All resource names parameterized via `variables.tf`
-- Outputs: connection strings, VM IP, Cloud Run URL, Pub/Sub topic names, GCS bucket names
+- Outputs: connection strings, VM IP, Pub/Sub topic names, GCS bucket names
 
 **Definition of Done:**
 - [x] `terraform validate` passes with no errors
-- [x] `terraform plan` shows all expected resources (Pub/Sub, GCS, Cloud SQL, GCE, Dataproc template, Cloud Run, VPC)
+- [x] `terraform plan` shows all expected resources (Pub/Sub, GCS, Cloud SQL, GCE, Dataproc template, Artifact Registry, VPC)
 - [x] Variables and outputs are documented
 - [x] Terraform Cloud workspace configured with OIDC credentials (both GitHub Actions WIF + Terraform Cloud Dynamic Provider Credentials)
 - [x] README in `infra/` explains `terraform apply` and `terraform destroy` usage
@@ -90,14 +90,13 @@ Create 5 GitHub Actions workflow files in `.github/workflows/` for automated dep
 
 **Requirements:**
 1. `terraform.yml` — Runs `terraform plan` on PR, `terraform apply` on merge to `main`. Uses `google-github-actions/auth@v2` with Workload Identity Federation.
-2. `deploy-streamlit.yml` — Build Docker image, push to GCR/Artifact Registry, deploy to Cloud Run. Trigger: push to `main` when `Dashboard.py` or `Dockerfile` changes.
-3. `deploy-vm.yml` — Build InfluxDB + SimService + Model API Docker images, push to registry, SSH into GCE VM and pull + restart containers. Trigger: manual or push to `main` when relevant files change.
-4. `deploy-dataproc.yml` — Upload Spark job files to GCS, submit Dataproc jobs. Trigger: manual.
-5. `upload-data.yml` — Upload raw data + replay cache to GCS. Trigger: manual.
+2. `deploy-vm.yml` — Build all VM service Docker images (InfluxDB, SimService, Model API, Streamlit), push to registry, SSH into GCE VM and pull + restart containers. Trigger: push to `main` when `model_serving/**`, `docker-compose.yml`, `Dockerfile`, `main.py`, `core/**`, `components/**`, `pages/**`, `assets/**`, or `.streamlit/**` change.
+3. `deploy-dataproc.yml` — Upload Spark job files to GCS, submit Dataproc jobs. Trigger: manual.
+4. `upload-data.yml` — Upload raw data + replay cache to GCS. Trigger: manual.
 - All workflows authenticate via Workload Identity Federation (no service account JSON keys in secrets).
 
 **Definition of Done:**
-- [x] All 5 `.yml` files exist in `.github/workflows/`
+- [x] All 4 `.yml` files exist in `.github/workflows/`
 - [x] Each workflow has correct trigger events
 - [x] WIF authentication configured (no stored secrets)
 - [x] `terraform.yml` runs `plan` on PR + `apply` on merge
@@ -105,7 +104,7 @@ Create 5 GitHub Actions workflow files in `.github/workflows/` for automated dep
 
 ---
 
-## Task 0.6 — Docker-Compose for Local Dev
+## Task 0.6 — Docker-Compose for Local Dev + VM Deployment
 
 | Field | Detail |
 |-------|--------|
@@ -115,49 +114,55 @@ Create 5 GitHub Actions workflow files in `.github/workflows/` for automated dep
 | **Blocks** | Local integration testing |
 
 **Spec:**
-Create `docker-compose.yml` that runs all VM-hosted services locally for development and testing.
+Create `docker-compose.yml` that runs all VM-hosted services locally for development and testing. This same file is used for VM deployment.
 
 **Requirements:**
 - Services:
   - `influxdb` — InfluxDB 2.x, port 8086, auto-create organization `f1chubby` and bucket `f1_live` with 4 measurements
   - `simulation-service` — Build from `SimulationService.py`, connects to Pub/Sub emulator or local mock
-  - `model-serving-api` — Build from `model_serving/Dockerfile`, port 8080, loads model from local `model_serving/models/` volume mount
+  - `model-serving-api` — Build from `model_serving/Dockerfile`, port 8080, loads model from GCS (or local `model_serving/models/` volume mount for dev)
+  - `streamlit` — Build from `Dockerfile`, port 8501, mounts `./f1_cache:/app/f1_cache` for persistent FastF1 cache. Environment variables: `INFLUXDB_URL`, `INFLUXDB_TOKEN`, `MODEL_API_URL`, `PG_HOST`, `PG_PORT`, `PG_USER`, `PG_PASSWORD`. Depends on `influxdb` and `model-serving-api`.
 - Environment variables for all connection strings (InfluxDB URL/token, Pub/Sub project, GCS bucket names)
 - Health checks for each service
 - Shared Docker network
+- All services: `restart: unless-stopped`
 
 **Definition of Done:**
-- [ ] `docker-compose up` starts all 3 services without errors
+- [ ] `docker-compose up` starts all 4 services without errors
 - [ ] InfluxDB UI accessible at `localhost:8086`
 - [ ] Model Serving API responds to `GET http://localhost:8080/health` with `200 OK`
+- [ ] Streamlit dashboard accessible at `localhost:8501`
 - [ ] Services can communicate with each other over the Docker network
 
 ---
 
-## Task 0.7 — Dockerize Streamlit
+## Task 0.7 — Dockerize Streamlit for VM
 
 | Field | Detail |
 |-------|--------|
 | **Phase** | 0 (Local Preparation) |
 | **Est. Effort** | 1 hr |
 | **Depends On** | — |
-| **Blocks** | 2.9 (Cloud Run deploy) |
+| **Blocks** | 2.9 (VM deploy) |
 
 **Spec:**
-Create a `Dockerfile` at the project root that containerizes the Streamlit dashboard.
+Create/update the `Dockerfile` at the project root that containerizes the Streamlit dashboard for deployment on the GCE VM via docker-compose.
 
 **Requirements:**
 - Base image: `python:3.11-slim`
-- Install dependencies from `requirements.txt`
-- Copy `Dashboard.py`, `assets/`, and any config files
+- Install dependencies from `requirements-streamlit.txt` (lighter than full `requirements.txt` — excludes `scikit-learn`, `joblib`, and their transitive deps)
+- Copy `main.py`, `assets/`, `core/` (for `data_loader.py`), `components/`, `pages/`, `.streamlit/` config
+- Do **not** copy `core/ml_core.py` model artifacts — all ML inference goes through the Model Serving API
 - Expose port 8501
-- `CMD ["streamlit", "run", "Dashboard.py", "--server.port=8501", "--server.address=0.0.0.0"]`
-- `.dockerignore` excludes `f1_cache/`, `.git/`, `infra/`, `spark/`, `__pycache__/`
+- `CMD ["streamlit", "run", "main.py", "--server.port=8501", "--server.address=0.0.0.0"]`
+- `.dockerignore` excludes `f1_cache/`, `.git/`, `infra/`, `spark/`, `__pycache__/`, `assets/Models/*.pkl`
+- FastF1 cache mounted as a host volume (`./f1_cache:/app/f1_cache`) in docker-compose, not baked into image
 
 **Definition of Done:**
 - [x] `docker build -t f1-dashboard .` succeeds (Dockerfile created, no Docker daemon locally to test)
 - [ ] `docker run -p 8501:8501 f1-dashboard` starts and the app is accessible at `localhost:8501`
-- [ ] Image size is reasonable (<500 MB)
+- [ ] Image size is reasonable (<400 MB, lighter without scikit-learn)
+- [ ] No `.pkl` model files inside the image
 
 ---
 
@@ -177,8 +182,8 @@ Deploy all infrastructure to GCP and verify every resource is operational.
 1. **1.1** `terraform apply` — deploy all resources. Upload raw data + replay cache to GCS (`gsutil -m cp`).
 2. **1.2** Verify 3 Pub/Sub topics + 6 subscriptions exist (`gcloud pubsub topics list`).
 3. **1.3** Start Cloud SQL instance, connect via `psql`, run `sql/init.sql` DDL to create all tables + indexes. Verify with `\dt`.
-4. **1.4** SSH to VM, verify Docker is running (startup script), deploy InfluxDB + Model Serving API containers via docker-compose. Initialize InfluxDB buckets. Verify `curl http://<VM_IP>:8080/health` responds.
-5. **1.5** Verify Cloud Run service exists and Dataproc API is enabled.
+4. **1.4** SSH to VM, verify Docker is running (startup script), deploy InfluxDB + Model Serving API + Streamlit containers via docker-compose. Initialize InfluxDB buckets. Verify `curl http://<VM_IP>:8080/health` responds.
+5. **1.5** Verify Dataproc API is enabled, Streamlit accessible at `http://<VM_IP>:8501`.
 
 **Definition of Done:**
 - [x] `terraform output` shows all connection strings and URLs
@@ -186,11 +191,12 @@ Deploy all infrastructure to GCP and verify every resource is operational.
 - [ ] `psql` connects to Cloud SQL and `\dt` shows all 9 tables *(blocked: waiting for Hieu's sql/init.sql)*
 - [ ] `curl http://<VM_IP>:8086/health` returns InfluxDB healthy *(blocked: waiting for docker-compose deploy)*
 - [ ] `curl http://<VM_IP>:8080/health` returns Model API healthy *(blocked: waiting for Kien's model_serving code)*
+- [ ] `curl http://<VM_IP>:8501/_stcore/health` returns Streamlit healthy
 - [x] GCS buckets exist (4 buckets verified: raw, models, replay, dataproc-staging)
 - [x] Cloud SQL instance running (34.21.160.55, db-f1-micro)
 - [x] VM running (34.124.140.104, e2-medium)
 - [x] Artifact Registry repo created (f1-chubby, DOCKER)
-- [x] Cloud Run + Dataproc APIs enabled
+- [x] Dataproc API enabled
 
 ---
 
@@ -207,15 +213,17 @@ Deploy all infrastructure to GCP and verify every resource is operational.
 Deploy the Model Serving API container on the GCE VM. Load pre-trained model artifacts from GCS. Verify the `/predict` and `/health` endpoints work.
 
 **Requirements:**
-- Pull model artifacts from `gs://f1chubby-models/` to VM local storage
-- Start the model-serving-api container with correct environment variables (model path, port 8080)
+- Pull model artifacts from `gs://f1chubby-models/` to VM local storage (or configure the container to download from GCS on startup)
+- Start the model-serving-api container with correct environment variables (model path, port 8080, GCS bucket name)
 - Verify `/health` returns `{"status": "healthy", "model_loaded": true, "model_version": "in_race_v1"}`
-- Verify `/predict` returns valid predictions for a test payload (use the sample from the interface contract in `revised_plan.md`)
+- Verify `/predict` returns valid in-race predictions for a test payload (use the sample from the interface contract in `revised_plan.md`)
+- Verify `/predict-prerace` returns valid pre-race podium probabilities for a test payload
 - Configure auto-restart policy (`restart: unless-stopped`)
 
 **Definition of Done:**
 - [ ] `curl http://<VM_IP>:8080/health` returns 200 with `model_loaded: true`
-- [ ] `curl -X POST http://<VM_IP>:8080/predict -H 'Content-Type: application/json' -d '<test_payload>'` returns predictions with `confidence` and `inference_time_ms`
+- [ ] `curl -X POST http://<VM_IP>:8080/predict -H 'Content-Type: application/json' -d '<test_payload>'` returns in-race predictions with `confidence` and `inference_time_ms`
+- [ ] `curl -X POST http://<VM_IP>:8080/predict-prerace -H 'Content-Type: application/json' -d '<test_payload>'` returns pre-race podium probabilities
 - [ ] Container auto-restarts after VM reboot
 - [ ] Inference latency <500ms for a single-instance request
 
@@ -247,7 +255,7 @@ Deploy the Simulation Service container on the GCE VM and configure it to publis
 
 ---
 
-## Task 2.9 — Deploy Streamlit to Cloud Run
+## Task 2.9 — Deploy Streamlit on VM
 
 | Field | Detail |
 |-------|--------|
@@ -257,20 +265,27 @@ Deploy the Simulation Service container on the GCE VM and configure it to publis
 | **Blocks** | 3.5, 3.6 (verification) |
 
 **Spec:**
-Build and deploy the Streamlit Docker image to Cloud Run.
+Deploy the Streamlit container on the GCE VM as part of the docker-compose stack. Verify it can connect to all data sources.
 
 **Requirements:**
-- Build image, push to Artifact Registry (`gcloud builds submit` or `docker push`)
-- Deploy to Cloud Run with environment variables for Cloud SQL connection string, InfluxDB URL/token, Model API URL
-- Set min-instances=0 (scale to zero), max-instances=2
-- Allow unauthenticated access (for demo)
-- Set Cloud SQL connection via Cloud Run's built-in Cloud SQL proxy
+- Build Streamlit image on VM (or push to Artifact Registry and pull)
+- Deploy via `docker compose up -d` alongside existing services (InfluxDB, Model API, Simulation Service)
+- Mount FastF1 cache as host volume (`./f1_cache:/app/f1_cache`) for persistent cache across restarts
+- Set environment variables:
+  - `INFLUXDB_URL=http://influxdb:8086` (internal Docker network)
+  - `INFLUXDB_TOKEN=<token>`
+  - `MODEL_API_URL=http://model-api:8080` (internal Docker network)
+  - `PG_HOST=<Cloud SQL IP>`, `PG_PORT=5432`, `PG_USER`, `PG_PASSWORD`, `PG_DATABASE`
+- Verify Streamlit is accessible at `http://<VM_IP>:8501`
+- Configure `restart: unless-stopped` for auto-restart after VM reboot
+- Verify port 8501 is open in VPC firewall rules
 
 **Definition of Done:**
-- [ ] Cloud Run URL serves the Streamlit dashboard
+- [ ] Streamlit dashboard accessible at `http://<VM_IP>:8501`
 - [ ] Dashboard loads without errors (no broken DB connections)
-- [ ] Scales to zero when no traffic (verify in Cloud Console after ~15 min idle)
+- [ ] FastF1 cache persists across container restarts
 - [ ] All environment variables correctly configured
+- [ ] Container auto-restarts after VM reboot
 
 ---
 
@@ -365,16 +380,17 @@ Create `MLCore.py` with two scikit-learn RandomForest models: a pre-race podium 
 | **Blocks** | 0.6 (Docker-compose), 2.2 (deploy on VM), 2.4 (slow path calls it) |
 
 **Spec:**
-Define the REST API contract and implement the Model Serving API in `model_serving/`. This is the decoupled inference endpoint that the Spark Streaming slow path will call.
+Define the REST API contract and implement the Model Serving API in `model_serving/`. This is the decoupled inference endpoint that both the Spark Streaming slow path and the Streamlit pre-race predictor will call.
 
 **Requirements:**
 - **Directory structure:**
   - `model_serving/Dockerfile`
   - `model_serving/app.py` — REST API implementation
-  - `model_serving/models/` — model artifacts (`.joblib` files)
+  - `model_serving/models/` — model artifacts (`.joblib` files, loaded from GCS at runtime)
   - `model_serving/requirements.txt`
 - **Endpoints:**
-  - `POST /predict` — Accept JSON body with `instances` array (see interface contract in `revised_plan.md`). Load the in-race model, run inference, return `predictions` array with `driver_id`, `predicted_position`, `confidence`.
+  - `POST /predict` — Accept JSON body with `instances` array (see interface contract in `revised_plan.md`). Load the in-race model, run inference, return `predictions` array with `driver_id`, `predicted_position`, `confidence`. Called by Spark Streaming slow path.
+  - `POST /predict-prerace` — Accept JSON body with `year`, `round`, and `features` array (driver, GridPosition, TeamTier, QualifyingDelta, FP2_PaceDelta, DriverForm). Load the pre-race model, run inference, return `predictions` array with `driver`, `podium_probability`. Called by Streamlit dashboard when user clicks "Generate Predictions".
   - `GET /health` — Return `{"status": "healthy", "model_loaded": true, "model_version": "in_race_v1", "uptime_seconds": N}`
 - **Error handling:**
   - Invalid JSON → 400 with error message
@@ -383,12 +399,14 @@ Define the REST API contract and implement the Model Serving API in `model_servi
 - **Response includes:** `model_version` and `inference_time_ms` for monitoring
 - **Technology choice:** FastAPI + joblib recommended (simplest), but team may choose MLflow or BentoML — the contract must remain the same
 - **Dockerfile:** Multi-stage build, expose port 8080
+- **Model loading:** Download model artifacts from GCS `gs://f1chubby-models/` on startup. Support on-demand refresh via a `/reload` endpoint (optional).
 
 **Definition of Done:**
 - [ ] `docker build -t model-api model_serving/` succeeds
 - [ ] `docker run -p 8080:8080 model-api` starts successfully
 - [ ] `GET /health` returns 200 with `model_loaded: true`
-- [ ] `POST /predict` with valid payload returns predictions with correct schema
+- [ ] `POST /predict` with valid payload returns in-race predictions with correct schema
+- [ ] `POST /predict-prerace` with valid payload returns pre-race podium probabilities
 - [ ] `POST /predict` with invalid payload returns 400
 - [ ] Inference time <500ms for 20-driver batch (single race)
 - [ ] Contract matches the interface spec in `revised_plan.md`
@@ -440,10 +458,14 @@ Walk Long through the `Dashboard.py` codebase so he can extend it for live panel
 - Explain: page structure, tab system, FastF1 data loading, session state management
 - Point out: where to add new pages/tabs for live views, how existing cache logic works
 - Clarify: which views should keep FastF1 cache (replay, dominance, gear maps) vs. migrate to PostgreSQL
+- Explain: live race predictions now come from **InfluxDB `predictions` measurement** (not inline ML). Long should use `influxdb-client` to query predictions, not import `ml_core.py`.
+- Explain: pre-race predictions are fetched via **HTTP POST to Model Serving API** (`POST /predict-prerace`), not by calling `ml_core` functions directly.
+- Share: InfluxDB measurement schemas (from Hieu's 0.1) so Long knows the tag/field structure for queries.
 
 **Definition of Done:**
 - [ ] Long can navigate `Dashboard.py` and explain the page structure
 - [ ] Long knows where to add new tabs and how `st.session_state` is used
+- [ ] Long understands the InfluxDB query pattern for live data and predictions
 
 ---
 
@@ -885,26 +907,31 @@ Create the Google Slides deck with structure, design template, and architecture 
 | **Blocks** | 2.9 (deploy), 3.6 (verify) |
 
 **Spec:**
-Add 4 new live race views to `Dashboard.py` that query InfluxDB for real-time data.
+Add 4 new live race views to the Streamlit app that query InfluxDB for real-time data. **All predictions come from InfluxDB — no inline ML inference.** The Streamlit app does not import `ml_core.py` or load `.pkl` model files for live race views.
 
 **Requirements:**
 - **Live Race Tracker:** Map/track visualization showing car positions (X/Y from `live_positions`). Auto-refresh every 1 second.
 - **Live Timing Board:** Table showing all drivers: position, gap to leader, interval, last lap time, tyre compound. Query `live_timing`. Auto-refresh.
 - **Race Control Feed:** Scrollable feed of flag events, safety car, incidents. Query `live_race_control`. Auto-refresh.
-- **AI Predictions Panel:** Table showing predicted finishing positions per driver with confidence scores. Query `predictions`.
+- **AI Predictions Panel:** Table showing predicted finishing positions per driver with confidence scores. Query InfluxDB `predictions` measurement (written by the Spark Streaming slow path via Model Serving API).
   - **Staleness indicator:** Show timestamp of last prediction. If >15 seconds stale, show warning badge (yellow). If >30 seconds, show error badge (red).
+  - Do **not** import `ml_core.py` or call `predict_live_lap()` — predictions are pre-computed by the slow path and stored in InfluxDB.
+- **Pre-Race Predictor:** Replace existing inline `ml_core` calls with `requests.post(MODEL_API_URL + "/predict-prerace", json=features)`. Keep the "Generate Predictions" button UX. Remove the "Retrain Model" button (training belongs in batch pipeline). Handle Model API unreachable → "Predictions unavailable" message.
 - All views use `influxdb-client` Python SDK
-- Add `INFLUXDB_URL` and `INFLUXDB_TOKEN` to environment variable config
+- Add `INFLUXDB_URL`, `INFLUXDB_TOKEN`, and `MODEL_API_URL` to environment variable config
 - New views should be in separate tabs/pages consistent with existing UI structure
+- Support `LOCAL_MODE` env var: when set, preserve existing FastF1-slicing + inline inference for development without the full pipeline
 
 **Definition of Done:**
-- [ ] 4 new views visible in the Streamlit app
+- [ ] 4 new live views visible in the Streamlit app
 - [ ] Live Race Tracker shows car positions on a track layout (or grid)
 - [ ] Live Timing Board auto-refreshes and shows all 20 drivers with correct data
 - [ ] Race Control Feed shows flag events as they happen
-- [ ] AI Predictions panel shows predictions with staleness indicator
+- [ ] AI Predictions panel shows predictions from InfluxDB with staleness indicator
+- [ ] Pre-Race Predictor fetches predictions from Model API via HTTP (not inline ML)
 - [ ] Staleness: >15s → yellow badge, >30s → red badge
 - [ ] All views handle "no data" gracefully (show "Waiting for data..." instead of errors)
+- [ ] No imports from `core.ml_core` or `joblib` in any live race component
 
 ---
 
@@ -1000,8 +1027,9 @@ Add a Pipeline Health panel/page to the Streamlit dashboard showing operational 
 - [ ] Live tracker updates in real time (all 20 cars visible)
 - [ ] Timing board matches Simulation Service output
 - [ ] Race control feed shows flag events
-- [ ] AI Predictions update every 5–10 seconds with staleness indicator
+- [ ] AI Predictions update every 5–10 seconds with staleness indicator (data from InfluxDB)
 - [ ] Fast path views continue when slow path is stopped
+- [ ] Pre-race predictor fetches from Model API, not inline ML
 
 ---
 
@@ -1083,7 +1111,7 @@ Day 3–4 (Apr 27–28): ← 2.1 + 2.2 done → Kien unblocked
   Long:  2.7 Streamlit PostgreSQL query layer → 2.8 Health panel
 
 Day 5 (Apr 29):
-  Duy:   2.9 Deploy Streamlit to Cloud Run
+  Duy:   2.9 Deploy Streamlit on VM
   Kien:  3.4 Verify slow path → 3.7 Kill slow-path test
   Hieu:  (slides / help)
   Thanh: (slides / help)
