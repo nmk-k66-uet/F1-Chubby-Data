@@ -103,17 +103,6 @@ module "dataproc" {
   depends_on = [google_project_service.apis]
 }
 
-module "cloudrun" {
-  source = "./modules/cloudrun"
-
-  project_id               = var.project_id
-  region                   = var.region
-  image                    = var.streamlit_image
-  cloudsql_connection_name = module.database.connection_name
-
-  depends_on = [google_project_service.apis]
-}
-
 # --- Workload Identity Federation for GitHub Actions ---
 
 resource "google_iam_workload_identity_pool" "github" {

@@ -18,11 +18,11 @@ permissions:
   id-token: write
 
 env:
-  PROJECT_ID: gen-lang-client-0126315221
+  PROJECT_ID: gen-lang-client-0314607994
   REGION: asia-southeast1
   ZONE: asia-southeast1-b
   CLUSTER_NAME: f1-chubby-spark
-  STAGING_BUCKET: f1chubby-dataproc-staging-gen-lang-client-0126315221
+  STAGING_BUCKET: f1chubby-dataproc-staging-gen-lang-client-0314607994
 
 jobs:
   submit:

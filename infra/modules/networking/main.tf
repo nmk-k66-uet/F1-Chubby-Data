@@ -35,7 +35,7 @@ resource "google_compute_firewall" "allow_app_ports" {
 
   allow {
     protocol = "tcp"
-    ports    = ["8080", "8086", "8501"]
+    ports    = ["80", "8080", "8086", "8501"]
   }
 
   source_ranges = ["0.0.0.0/0"]

@@ -1,11 +1,19 @@
-name: Deploy VM Services
+name: Deploy to VM
 
 on:
   push:
     branches: [main]
     paths:
-      - 'model_serving/**'
+      - 'main.py'
+      - 'Dockerfile'
       - 'docker-compose.yml'
+      - 'requirements-streamlit.txt'
+      - 'core/**'
+      - 'components/**'
+      - 'pages/**'
+      - 'assets/**'
+      - '.streamlit/**'
+      - 'model_serving/**'
   workflow_dispatch:
 
 permissions:
@@ -13,7 +21,7 @@ permissions:
   id-token: write
 
 env:
-  PROJECT_ID: gen-lang-client-0126315221
+  PROJECT_ID: gen-lang-client-0314607994
   ZONE: asia-southeast1-b
   VM_NAME: f1-chubby-vm
 
@@ -33,17 +41,18 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Copy files to VM
+      - name: Copy app files to VM
         run: |
           gcloud compute scp --recurse \
-            docker-compose.yml model_serving/ \
+            main.py Dockerfile docker-compose.yml requirements-streamlit.txt \
+            .streamlit core components pages model_serving \
             ${{ env.VM_NAME }}:~/app/ \
             --zone ${{ env.ZONE }} \
             --quiet
 
-      - name: Deploy services on VM
+      - name: Deploy on VM
         run: |
           gcloud compute ssh ${{ env.VM_NAME }} \
             --zone ${{ env.ZONE }} \
             --quiet \
-            --command "cd ~/app && docker compose pull && docker compose up -d --remove-orphans"
+            --command "cd ~/app && docker compose up -d --build --remove-orphans"

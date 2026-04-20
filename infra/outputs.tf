@@ -56,11 +56,6 @@ output "dataproc_staging_bucket" {
   value = module.dataproc.staging_bucket
 }
 
-# --- Cloud Run / Artifact Registry ---
-output "artifact_registry_repo" {
-  value = module.cloudrun.artifact_registry_repo
-}
-
 # --- Workload Identity Federation (GitHub Actions) ---
 output "wif_provider" {
   value = google_iam_workload_identity_pool_provider.github.name
