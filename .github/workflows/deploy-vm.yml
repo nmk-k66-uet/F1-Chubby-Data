@@ -14,6 +14,9 @@ on:
       - 'assets/**'
       - '.streamlit/**'
       - 'model_serving/**'
+      - 'sql/**'
+      - 'simulation_service.py'
+      - 'schemas/**'
   workflow_dispatch:
 
 permissions:
@@ -43,16 +46,22 @@ jobs:
 
       - name: Copy app files to VM
         run: |
+          # Copy core app files
           gcloud compute scp --recurse \
             main.py Dockerfile docker-compose.yml requirements-streamlit.txt \
-            .streamlit core components pages model_serving \
+            .streamlit core components pages model_serving sql \
             ${{ env.VM_NAME }}:~/app/ \
             --zone ${{ env.ZONE }} \
             --quiet
+          # Copy simulation service and schemas if they exist
+          for f in simulation_service.py; do
+            [ -f "$f" ] && gcloud compute scp "$f" ${{ env.VM_NAME }}:~/app/ --zone ${{ env.ZONE }} --quiet || true
+          done
+          [ -d "schemas" ] && gcloud compute scp --recurse schemas ${{ env.VM_NAME }}:~/app/ --zone ${{ env.ZONE }} --quiet || true
 
       - name: Deploy on VM
         run: |
           gcloud compute ssh ${{ env.VM_NAME }} \
             --zone ${{ env.ZONE }} \
             --quiet \
-            --command "cd ~/app && docker compose up -d --build --remove-orphans"
+            --command "cd ~/app && sudo docker compose up -d --build --remove-orphans"
