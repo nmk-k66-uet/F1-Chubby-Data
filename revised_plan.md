@@ -29,8 +29,8 @@ flowchart LR
     end
 
     subgraph Processing
-        SPARKB[Spark Batch<br/>Dataproc]
-        FE[Feature Eng<br/>+ Model Training]
+        SPARK_ETL[Spark ETL<br/>Dataproc]
+        SPARK_TRAIN[Spark Training<br/>Dataproc]
         FAST[Spark Streaming<br/>Fast Path]
         SLOW[Spark Streaming<br/>Slow Path]
     end
@@ -50,9 +50,8 @@ flowchart LR
     FIA --> DC --> GCS
     SIM --> PUBSUB
 
-    GCS --> SPARKB --> FE
-    FE --> PG
-    FE -->|model artifact| GCS
+    GCS --> SPARK_ETL --> PG
+    GCS --> SPARK_TRAIN -->|model artifact| GCS
 
     PUBSUB --> FAST --> INFLUX
     PUBSUB --> SLOW --> MLAPI --> INFLUX
@@ -65,24 +64,26 @@ flowchart LR
 
 ### Batch Processing Detail
 
+Two independent Spark Dataproc jobs — ETL and Model Training — run in parallel. Neither depends on the other.
+
 ```mermaid
 flowchart TD
-    GCS[Cloud Storage<br/>gs://f1chubby-raw/year/round/session/] --> LOAD[Data Load + Transform]
-    LOAD --> FEAT[Feature Engineering<br/>GridPos, QualDelta, PaceDelta,<br/>DriverForm, TeamTier]
-    FEAT --> PRE_MODEL[Pre-Race Model Training<br/>RandomForest Classifier<br/>Target: Podium Probability]
-    FEAT --> IN_MODEL[In-Race Model Training<br/>RandomForest Regressor<br/>Target: Finishing Position]
-    PRE_MODEL -->|pre_race_model.pkl| GCS_OUT[GCS gs://f1chubby-models/]
-    IN_MODEL -->|in_race_model.pkl| GCS_OUT
-    FEAT --> PG_WRITE[Write to Cloud SQL PostgreSQL via JDBC]
-    PG_WRITE --> T1[race_calendar]
-    PG_WRITE --> T2[session_results]
-    PG_WRITE --> T3[driver_standings]
-    PG_WRITE --> T4[constructor_standings]
-    PG_WRITE --> T5[lap_times]
-    PG_WRITE --> T6[telemetry_summary]
-    PG_WRITE --> T7[ml_features]
-    PG_WRITE --> T8[prediction_accuracy]
-    PG_WRITE --> DQ[data_quality<br/>Row count validation]
+    subgraph ETL ["Spark ETL Pipeline (Hieu)"]
+        GCS_E[Cloud Storage<br/>gs://f1chubby-raw/] --> LOAD[Data Load + Transform]
+        LOAD --> PG_WRITE[Write to Cloud SQL PostgreSQL via JDBC]
+        PG_WRITE --> T1[race_calendar]
+        PG_WRITE --> T2[session_results]
+        PG_WRITE --> T3[driver_standings]
+        PG_WRITE --> T4[constructor_standings]
+    end
+
+    subgraph TRAIN ["Spark Model Training Pipeline (Long)"]
+        GCS_T[Cloud Storage<br/>gs://f1chubby-raw/] --> FEAT[Feature Engineering<br/>GridPos, QualDelta, PaceDelta,<br/>DriverForm, TeamTier]
+        FEAT --> PRE_MODEL[Pre-Race Model Training<br/>RandomForest Classifier<br/>Target: Podium Probability]
+        FEAT --> IN_MODEL[In-Race Model Training<br/>RandomForest Regressor<br/>Target: Finishing Position]
+        PRE_MODEL -->|pre_race_model.pkl| GCS_OUT[GCS gs://f1chubby-models/]
+        IN_MODEL -->|in_race_model.pkl| GCS_OUT
+    end
 ```
 
 ### Streaming Processing Detail
@@ -125,11 +126,6 @@ flowchart LR
         SR[session_results]
         DS[driver_standings]
         CS[constructor_standings]
-        LT[lap_times]
-        TS[telemetry_summary]
-        MF[ml_features]
-        PA[prediction_accuracy]
-        DQ[data_quality]
     end
 
     subgraph IDB ["InfluxDB | Live"]
@@ -149,13 +145,11 @@ flowchart LR
         HIST[Historical Views]
         LIVE[Live Race Views]
         HIRES[Replay + Dominance]
-        HEALTH[Pipeline Health]
     end
 
-    RC & SR & DS & CS & LT & TS & MF & PA --> HIST
+    RC & SR & DS & CS --> HIST
     LP & LTM & LRC & PRED --> LIVE
     REPLAY & DOM & GEAR --> HIRES
-    DQ --> HEALTH
 ```
 
 ---
@@ -255,8 +249,6 @@ flowchart TD
   | `session_results` | ETL script | Finishing order, grid, points, status, Q1/Q2/Q3 times, best lap time per driver per session (Q/R/S) | Results tab, event highlights |
   | `driver_standings` | ETL script (computed from `session_results`) | Cumulative championship points and wins after each round | Drivers page |
   | `constructor_standings` | ETL script (computed from `session_results`) | Constructor championship points and wins after each round | Constructors page |
-
-  > **Note:** Additional tables (`lap_times`, `telemetry_summary`, `ml_features`, `prediction_accuracy`, `data_quality`) are planned for Phase 2 when Spark Batch is integrated. The ETL script populates the 4 core tables directly from FastF1.
 
 #### InfluxDB — Live Streaming Data
 
@@ -365,17 +357,24 @@ flowchart TD
 
 ### 5. Processing Layer
 
-#### Spark Batch
+#### Spark ETL
 
-- **Role:** Processes all historical data from GCS, engineers ML features, trains models, and populates Cloud SQL PostgreSQL.
+- **Role:** Reads raw historical data from GCS, transforms it, and populates Cloud SQL PostgreSQL with the 4 core tables.
 - **Jobs:**
   1. **Data Load + Transform** — Read raw data from GCS, clean, normalize, resolve schema differences across seasons.
-  2. **Feature Engineering** — Compute features: grid position, qualifying delta, FP2/Sprint pace delta, driver form, team tier, tyre strategy metrics.
-  3. **Pre-Race Model Training** — scikit-learn RandomForest classifier on engineered features. Save to GCS (`gs://f1chubby-models/pre_race_model.pkl`).
-  4. **In-Race Model Training** — Trained on historical in-race snapshots (lap-by-lap state → final result). Save to GCS (`gs://f1chubby-models/in_race_model.pkl`).
-  5. **Historical Data Load** — Write all processed data to Cloud SQL PostgreSQL via JDBC connector.
-  6. **Data Quality Validation** — Row count checks per season per table. Write results to `data_quality` table.
-- **Platform:** GCP Dataproc, single-node cluster (n1-standard-4), auto-delete after job completes (for batch) or 10 min idle (for streaming).
+  2. **Historical Data Load** — Write all processed data to Cloud SQL PostgreSQL via JDBC connector (race_calendar, session_results, driver_standings, constructor_standings).
+- **Platform:** GCP Dataproc, single-node cluster (n1-standard-4), auto-delete after job completes.
+- **Independence:** Does not depend on model training. Can run in parallel with the training pipeline.
+
+#### Spark Model Training
+
+- **Role:** Reads raw historical data from GCS, engineers ML features, trains both models, and uploads serialized artifacts to GCS.
+- **Jobs:**
+  1. **Feature Engineering** — Compute features: grid position, qualifying delta, FP2/Sprint pace delta, driver form, team tier, tyre strategy metrics (pre-race); lap-by-lap state snapshots (in-race).
+  2. **Pre-Race Model Training** — scikit-learn RandomForest classifier on engineered features. Save to GCS (`gs://f1chubby-models/pre_race_model.pkl`).
+  3. **In-Race Model Training** — Trained on historical in-race snapshots (lap-by-lap state → final result). Save to GCS (`gs://f1chubby-models/in_race_model.pkl`).
+- **Platform:** GCP Dataproc, single-node cluster (n1-standard-4), auto-delete after job completes.
+- **Independence:** Does not write to PostgreSQL. Can run in parallel with the ETL pipeline.
 
 #### Spark Streaming — Fast Path
 
@@ -448,7 +447,7 @@ flowchart LR
 - **Features:** GridPosition, TeamTier, QualifyingDelta, FP2_PaceDelta, DriverForm (from `DataCrawler.py` feature engineering).
 - **Target:** Podium probability (binary: top 3 finish).
 - **Training:** Spark Batch job, scikit-learn RandomForest.
-- **Inference:** Model Serving API `POST /predict-prerace`, called by the Streamlit dashboard when user clicks "Generate Predictions". Results also stored in PostgreSQL `prediction_accuracy` for historical accuracy tracking.
+- **Inference:** Model Serving API `POST /predict-prerace`, called by the Streamlit dashboard when user clicks "Generate Predictions".
 - **Purpose:** "Before the race starts, here's who we think will podium."
 
 #### In-Race Model
@@ -511,7 +510,6 @@ flowchart TD
   - Last write timestamp per InfluxDB measurement and PostgreSQL table
   - Dataproc job status (Dataproc REST API or `gcloud dataproc jobs list`)
   - Model Serving API health, model version, inference latency (via `/health` endpoint)
-  - Data quality summary (from PostgreSQL `data_quality` table)
 
 - **High-Resolution Telemetry:** Race replay, track dominance, and gear maps require 100ms-interpolated X/Y coordinates and per-meter Distance indexing. This data is too granular for either database to serve efficiently. **Keep the existing FastF1 cache + Pandas in-memory approach.** The batch pipeline loads summary-level telemetry to PostgreSQL; full-resolution telemetry is served from cache.
 
@@ -548,9 +546,10 @@ flowchart TD
 
         subgraph Compute
             VM[GCE: e2-medium<br/>Docker: InfluxDB + SimService<br/>+ Model Serving API + Streamlit]
-            DP_BATCH[Dataproc Cluster 1<br/>Batch Job]
-            DP_FAST[Dataproc Cluster 2<br/>Streaming Fast Path]
-            DP_SLOW[Dataproc Cluster 3<br/>Streaming Slow Path]
+            DP_ETL[Dataproc Cluster 1<br/>ETL Job]
+            DP_TRAIN[Dataproc Cluster 2<br/>Training Job]
+            DP_FAST[Dataproc Cluster 3<br/>Streaming Fast Path]
+            DP_SLOW[Dataproc Cluster 4<br/>Streaming Slow Path]
         end
 
         subgraph Data
@@ -709,14 +708,15 @@ gantt
 
 | # | Task | Depends On | Est. Effort | Parallel Stream |
 |---|------|------------|-------------|-----------------|
-| 2.1 | Spark Batch job on Dataproc: GCS → data load + transform + feature engineering → Cloud SQL PostgreSQL (JDBC) + model artifacts → GCS | 1.1, 1.3, 1.5, 0.2 | 10 hrs | A |
+| 2.1a | Spark ETL on Dataproc: GCS → data load + transform → Cloud SQL PostgreSQL (JDBC), 4 core tables | 1.1, 1.3, 1.5 | 5 hrs | A |
+| 2.1b | Spark Model Training on Dataproc: GCS → feature engineering → train pre-race + in-race models → `.pkl` → GCS | 1.1, 1.5 | 5 hrs | A' |
 | 2.2 | Deploy Model Serving API on VM, load pre-trained models, test /predict and /health endpoints | 1.4, 0.2b | 2 hrs | B |
 | 2.3 | Spark Streaming fast path on Dataproc: Pub/Sub → parse/validate JSON → enrich metadata → InfluxDB live measurements | 1.2, 1.4, 1.5, 0.4b | 6 hrs | B |
-| 2.4 | Spark Streaming slow path on Dataproc: Pub/Sub → windowed features → call Model Serving API → write predictions to InfluxDB | 1.2, 1.4, 1.5, 2.1, 2.2 | 7 hrs | B (after 2.1, 2.2) |
+| 2.4 | Spark Streaming slow path on Dataproc: Pub/Sub → windowed features → call Model Serving API → write predictions to InfluxDB | 1.2, 1.4, 1.5, 2.1b, 2.2 | 7 hrs | B (after 2.1b, 2.2) |
 | 2.5 | Configure Simulation Service on VM to produce to Pub/Sub | 1.2, 1.4, 0.4 | 2 hrs | C |
 | 2.6 | Streamlit: add live race panels (tracker, timing board, race control feed, AI predictions + staleness indicator) — reads from InfluxDB, no inline ML inference | 0.1 | 5 hrs | C |
-| 2.7 | Streamlit: add Cloud SQL PostgreSQL query layer for historical views (SQL queries alongside existing FastF1 cache logic) | 1.3, 2.1 | 4 hrs | A (after 2.1) |
-| 2.8 | Streamlit: add pipeline health panel (Pub/Sub backlog, DB freshness, Dataproc job status, Model API /health, data quality) | 2.1, 2.2, 2.4 | 3 hrs | C (after 2.1, 2.2) |
+| 2.7 | Streamlit: add Cloud SQL PostgreSQL query layer for historical views (SQL queries alongside existing FastF1 cache logic) | 1.3, 2.1a | 4 hrs | A (after 2.1a) |
+| 2.8 | Streamlit: add pipeline health panel (Pub/Sub backlog, DB freshness, Dataproc job status, Model API /health) | 2.1a, 2.2, 2.4 | 3 hrs | C (after 2.1a, 2.2) |
 | 2.9 | Deploy Streamlit app on VM via docker-compose (mount FastF1 cache, configure env vars for InfluxDB/Model API/PostgreSQL) | 2.6, 2.7, 2.8 | 1 hr | — |
 
 **Phase 2 subtotal: ~40 hrs**
@@ -725,8 +725,8 @@ gantt
 
 | # | Task | Depends On | Est. Effort |
 |---|------|------------|-------------|
-| 3.0 | Data quality validation: row-count checks per season per Cloud SQL PostgreSQL table, schema consistency, log to `data_quality` | 2.1 | 2 hrs |
-| 3.1 | Run Spark Batch end-to-end, verify all historical data in Cloud SQL PostgreSQL, model artifacts in GCS | 2.1 | 1 hr |
+| 3.0 | Data quality validation: row-count checks per season per Cloud SQL PostgreSQL table, schema consistency | 2.1a | 2 hrs |
+| 3.1 | Run Spark ETL + Training end-to-end, verify all historical data in Cloud SQL PostgreSQL, model artifacts in GCS | 2.1a, 2.1b | 1 hr |
 | 3.2 | Start Simulation → verify events arrive in Pub/Sub (check Cloud Console metrics) | 2.5 | 30 min |
 | 3.3 | Start fast-path streaming → verify live data in InfluxDB within 1 sec | 2.3, 3.2 | 1 hr |
 | 3.4 | Start slow-path streaming → verify predictions in InfluxDB (independent of fast path) | 2.4, 3.2 | 1 hr |
@@ -763,46 +763,50 @@ gantt
 
 ---
 
-## Parallel Work Streams (2–3 team members)
+## Parallel Work Streams (5 team members)
 
 ```mermaid
 flowchart TD
-    subgraph "Stream A — Batch + DB"
-        A1[0.1 Schema Design] --> A2[0.8 Terraform Config]
-        A2 --> A3[2.1 Spark Batch]
-        A3 --> A4[2.7 Streamlit PostgreSQL]
-        A3 --> A5[3.0 Data Quality]
+    subgraph "Stream A — ETL + DB (Hieu)"
+        A1[0.3 DataCrawler GCS] --> A2[2.1a Spark ETL]
+        A2 --> A3[2.7 Streamlit PostgreSQL]
+        A2 --> A4[3.0 Data Quality]
     end
 
-    subgraph "Stream B — Streaming + ML + Serving"
-        B1[0.2 MLCore.py] --> B1b[0.2b Model API Contract]
-        B1b --> B2[0.3 Extend DataCrawler]
-        B2 --> B3[2.2 Deploy Model Serving API]
-        B3 --> B4[2.3 Streaming Fast Path]
-        B4 --> B5[2.4 Streaming Slow Path]
-        B5 --> B6[3.3–3.4 Streaming Tests]
+    subgraph "Stream A' — Model Training (Long)"
+        AT1[2.1b Spark Training] -->|trained model .pkl| AT2[GCS gs://f1chubby-models/]
     end
 
-    subgraph "Stream C — Frontend + Infra"
-        C1[0.4 Simulation Service] --> C2[0.4b Pub/Sub Schemas]
-        C2 --> C3[2.5 Simulation on VM]
-        C3 --> C4[2.6 Streamlit Live Panels]
-        C4 --> C5[2.8 Health Panel]
+    subgraph "Stream B — Streaming + Simulation (Thanh)"
+        B1[0.4 Simulation Service] --> B1b[0.4b Pub/Sub Schemas]
+        B1b --> B2[0.5 Pre-cache Replays]
+        B1b --> B3[2.3 Streaming Fast Path]
+        B1b --> B4[2.5 Deploy Sim on VM]
+        AT2 --> B5[2.4 Streaming Slow Path]
+        B3 --> B6[3.3 Verify Fast Path]
+        B5 --> B7[3.4 Verify Slow Path]
     end
 
-    A3 -->|trained model| B3
-    A4 & B6 & C5 --> DEPLOY[2.9 Deploy Streamlit on VM]
+    subgraph "Stream C — Live Panels (Duy)"
+        C1[2.6 Streamlit Live Panels] --> C2[2.8 Health Panel]
+    end
+
+    subgraph "Stream D — Slides (Kien)"
+        D1[ML & Model Serving Slides]
+    end
+
+    A3 & B6 & B7 & C2 --> DEPLOY[2.9 Deploy Streamlit on VM]
     DEPLOY --> TEST[3.5–3.9 E2E Testing]
 ```
 
-| Stream A (Batch + DB) | Stream B (Streaming + ML + Serving) | Stream C (Frontend + Infra) |
-|------------------------|--------------------------------------|------------------------------|
-| 0.1 Schema design | 0.2 MLCore.py | 0.4 Simulation Service |
-| 0.8 Terraform config | 0.2b Model API contract | 0.4b Pub/Sub schemas |
-| 2.1 Spark Batch | 2.2 Deploy Model Serving API | 2.5 Simulation on VM |
-| 2.7 Streamlit PostgreSQL | 2.3 Streaming fast path | 2.6 Streamlit live panels |
-| 3.0 Data quality | 2.4 Streaming slow path | 2.8 Health panel |
-| | 3.3–3.4 Streaming tests | |
+| Stream A — ETL (Hieu) | Stream A' — Training (Long) | Stream B — Streaming (Thanh) | Stream C — Live Panels (Duy) | Stream D (Kien) |
+|------------------------|----------------------------|-------------------------------|-------------------------------|-----------------|
+| 0.3 DataCrawler GCS | 2.1b Spark Training | 0.4 Simulation Service | 2.6 Streamlit live panels | Slides |
+| 2.1a Spark ETL | | 0.4b Pub/Sub schemas | 2.8 Health panel | |
+| 2.7 Streamlit PG | | 0.5 Pre-cache replays | | |
+| 3.0 Data quality | | 2.3 Streaming fast path | | |
+| | | 2.4 Streaming slow path | | |
+| | | 2.5 Deploy sim on VM | | |
 
 ---
 
@@ -849,7 +853,19 @@ ML inference abstracted behind a REST API (POST /predict, GET /health). Technolo
 
 $300 free trial credits. Pub/Sub is a simpler message bus than Event Hubs (no capacity units). Dataproc is pure open-source Spark (no vendor lock-in like Databricks). Terraform is cloud-agnostic IaC (more widely used than Bicep).
 
-### 9. Streamlit on VM (not Cloud Run)
+### 9. Separate ETL and Model Training Pipelines
+
+The batch processing layer is split into two independent Spark Dataproc jobs:
+- **Spark ETL** (task 2.1a): GCS → data load + transform → PostgreSQL (4 tables). Owned by Hieu.
+- **Spark Model Training** (task 2.1b): GCS → feature engineering → train models → `.pkl` → GCS. Owned by Long.
+
+Both read from the same GCS source but are fully independent — neither blocks the other, and they can run on separate Dataproc clusters simultaneously. This separation:
+- Enables parallel development by different team members
+- Allows retraining models without re-loading all historical data to PostgreSQL
+- Allows re-loading PostgreSQL without retraining models
+- Makes each job smaller, faster, and easier to debug
+
+### 10. Streamlit on VM (not Cloud Run)
 
 The Streamlit dashboard runs as a Docker container on the GCE VM via `docker-compose`, co-located with InfluxDB, Model Serving API, and Simulation Service. Rationale:
 - **Persistent FastF1 cache:** High-resolution telemetry (replay, track dominance, gear maps) requires ~2–5 GB of FastF1 cache on disk. Cloud Run containers are ephemeral — the cache would need to be re-downloaded on every cold start or baked into the image (bloating it to 5–10 GB).
@@ -918,7 +934,8 @@ F1-Chubby-Data/
 │   ├── data_loader.py           # Data sources: PostgreSQL first, FastF1 fallback
 │   └── ...
 ├── spark/
-│   ├── batch_pipeline.py        # Spark Batch job
+│   ├── etl_pipeline.py          # Spark ETL job (GCS → PG, 4 tables)
+│   ├── training_pipeline.py     # Spark Model Training job (GCS → features → train → .pkl → GCS)
 │   ├── streaming_fast.py        # Spark Streaming fast path
 │   └── streaming_slow.py        # Spark Streaming slow path (calls Model API)
 ├── .github/
