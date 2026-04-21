@@ -11,11 +11,10 @@ on:
 
 permissions:
   contents: read
-  id-token: write   # required for WIF OIDC
   pull-requests: write
 
 env:
-  TF_CLOUD_ORGANIZATION: "f1-chubby-data"
+  TF_CLOUD_ORGANIZATION: "duyle"
   TF_WORKSPACE: "f1-chubby-data"
 
 jobs:
@@ -32,12 +31,6 @@ jobs:
         with:
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.WIF_SA_EMAIL }}
-
       - name: Terraform Init
         run: terraform init
 
@@ -49,7 +42,7 @@ jobs:
 
       - name: Terraform Plan
         id: plan
-        run: terraform plan -no-color -var="db_password=${{ secrets.DB_PASSWORD }}"
+        run: terraform plan -no-color
         continue-on-error: true
 
       - name: Comment Plan on PR
@@ -71,4 +64,4 @@ jobs:
 
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        run: terraform apply -auto-approve -var="db_password=${{ secrets.DB_PASSWORD }}"
+        run: terraform apply -auto-approve

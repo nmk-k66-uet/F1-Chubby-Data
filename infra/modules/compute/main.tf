@@ -1,3 +1,9 @@
+resource "google_compute_address" "f1_static_ip" {
+  name    = "f1-chubby-static-ip"
+  project = var.project_id
+  region  = var.region
+}
+
 resource "google_compute_instance" "f1_vm" {
   name         = "f1-chubby-vm"
   project      = var.project_id
@@ -16,7 +22,9 @@ resource "google_compute_instance" "f1_vm" {
 
   network_interface {
     subnetwork = var.subnet_id
-    access_config {} # ephemeral public IP
+    access_config {
+      nat_ip = google_compute_address.f1_static_ip.address
+    }
   }
 
   metadata = {

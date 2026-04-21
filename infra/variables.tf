@@ -61,3 +61,16 @@ variable "TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL" {
   type        = string
   default     = ""
 }
+
+# ---------- TFC Dynamic Provider Credentials ----------
+variable "TFC_GCP_PROVIDER_AUTH" {
+  description = "TFC dynamic credential: enable GCP provider auth"
+  type        = string
+  default     = ""
+}
+
+variable "TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL" {
+  description = "TFC dynamic credential: GCP service account email"
+  type        = string
+  default     = ""
+}

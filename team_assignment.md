@@ -61,7 +61,7 @@ Write Terraform config in `infra/` directory that provisions all GCP resources f
   - `database/` — Cloud SQL PostgreSQL instance, `db-f1-micro`, activation policy `NEVER` by default (start manually)
   - `compute/` — GCE VM `e2-medium`, startup script installs Docker + docker-compose
   - `dataproc/` — Cluster template configs (single-node `n1-standard-4`, auto-delete)
-  - `cloudrun/` — Artifact Registry repo (Cloud Run module removed from Terraform, kept for registry)
+  - `registry/` — Artifact Registry (Docker image storage for VM services)
 - Backend: Terraform Cloud (free tier), workspace `f1-chubby-data`
 - Authentication: Workload Identity Federation (OIDC) — no stored GCP service account keys
 - All resource names parameterized via `variables.tf`
@@ -69,7 +69,7 @@ Write Terraform config in `infra/` directory that provisions all GCP resources f
 
 **Definition of Done:**
 - [x] `terraform validate` passes with no errors
-- [x] `terraform plan` shows all expected resources (Pub/Sub, GCS, Cloud SQL, GCE, Dataproc template, VPC)
+- [x] `terraform plan` shows all expected resources (Pub/Sub, GCS, Cloud SQL, GCE, Dataproc template, Artifact Registry, VPC)
 - [x] Variables and outputs are documented
 - [x] Terraform Cloud workspace configured with OIDC credentials (both GitHub Actions WIF + Terraform Cloud Dynamic Provider Credentials)
 - [x] README in `infra/` explains `terraform apply` and `terraform destroy` usage
@@ -90,9 +90,9 @@ Create 4 GitHub Actions workflow files in `.github/workflows/` for automated dep
 
 **Requirements:**
 1. `terraform.yml` — Runs `terraform plan` on PR, `terraform apply` on merge to `main`. Uses `google-github-actions/auth@v2` with Workload Identity Federation.
-2. `deploy-vm.yml` — SCP all app files to GCE VM, run `docker compose up -d --build`. Trigger: push to `main` when `model_serving/**`, `docker-compose.yml`, `Dockerfile`, `main.py`, `core/**`, `components/**`, `pages/**`, or `.streamlit/**` change.
+2. `deploy-vm.yml` — Build all VM service Docker images (InfluxDB, SimService, Model API, Streamlit), push to registry, SSH into GCE VM and pull + restart containers. Trigger: push to `main` when `model_serving/**`, `docker-compose.yml`, `Dockerfile`, `main.py`, `core/**`, `components/**`, `pages/**`, `assets/**`, or `.streamlit/**` change.
 3. `deploy-dataproc.yml` — Upload Spark job files to GCS, submit Dataproc jobs. Trigger: manual.
-4. `upload-data.yml` — Upload raw data, replay cache, and model artifacts to GCS. Trigger: manual.
+4. `upload-data.yml` — Upload raw data + replay cache to GCS. Trigger: manual.
 - All workflows authenticate via Workload Identity Federation (no service account JSON keys in secrets).
 
 **Definition of Done:**
@@ -128,13 +128,11 @@ Create `docker-compose.yml` that runs all VM-hosted services locally for develop
 - All services: `restart: unless-stopped`
 
 **Definition of Done:**
-- [x] `docker-compose up` starts all services without errors (3 services: streamlit, model-api, influxdb)
-- [x] InfluxDB UI accessible at `localhost:8086`
-- [x] Model Serving API responds to `GET http://localhost:8080/health` with `200 OK`
-- [x] Streamlit dashboard accessible at `localhost:80` (mapped from 8501)
-- [x] Services can communicate with each other over the Docker network
-
-> **Status (Apr 20):** Completed. `docker-compose.yml` deploys 3 services (influxdb, model-api, streamlit). Simulation Service deferred to Phase 2 (Pub/Sub integration). Domain: `https://f1.thedblaster.id.vn` via Cloudflare.
+- [ ] `docker-compose up` starts all 4 services without errors
+- [ ] InfluxDB UI accessible at `localhost:8086`
+- [ ] Model Serving API responds to `GET http://localhost:8080/health` with `200 OK`
+- [ ] Streamlit dashboard accessible at `localhost:8501`
+- [ ] Services can communicate with each other over the Docker network
 
 ---
 
@@ -157,15 +155,14 @@ Create/update the `Dockerfile` at the project root that containerizes the Stream
 - Do **not** copy `core/ml_core.py` model artifacts — all ML inference goes through the Model Serving API
 - Expose port 8501
 - `CMD ["streamlit", "run", "main.py", "--server.port=8501", "--server.address=0.0.0.0"]`
-- `.dockerignore` excludes `f1_cache/`, `.git/`, `infra/`, `spark/`, `__pycache__/`
+- `.dockerignore` excludes `f1_cache/`, `.git/`, `infra/`, `spark/`, `__pycache__/`, `assets/Models/*.pkl`
 - FastF1 cache mounted as a host volume (`./f1_cache:/app/f1_cache`) in docker-compose, not baked into image
 
 **Definition of Done:**
-- [x] `docker build -t f1-dashboard .` succeeds
-- [x] Container starts and the app is accessible (port 80 → 8501 via docker-compose)
-- [x] Image uses `requirements-streamlit.txt` (lighter without scikit-learn)
-- [x] No `.pkl` model files inside the image
-- [x] HEALTHCHECK configured on `/_stcore/health`
+- [x] `docker build -t f1-dashboard .` succeeds (Dockerfile created, no Docker daemon locally to test)
+- [ ] `docker run -p 8501:8501 f1-dashboard` starts and the app is accessible at `localhost:8501`
+- [ ] Image size is reasonable (<400 MB, lighter without scikit-learn)
+- [ ] No `.pkl` model files inside the image
 
 ---
 
@@ -191,19 +188,15 @@ Deploy all infrastructure to GCP and verify every resource is operational.
 **Definition of Done:**
 - [x] `terraform output` shows all connection strings and URLs
 - [x] `gcloud pubsub topics list` shows 3 topics (f1-telemetry, f1-timing, f1-race-control)
-- [x] Cloud SQL schema created (4 tables: `race_calendar`, `session_results`, `driver_standings`, `constructor_standings`)
-- [x] Data loaded: 2024 (1,078 rows, 24 rounds), 2025 (1,079 rows, 24 rounds), 2026 (154 rows, 3 rounds)
-- [x] InfluxDB running at `<VM_IP>:8086` (f1-influxdb container)
-- [x] Model API running at `model-api:8080` (f1-model-api container, internal network)
-- [x] Streamlit running at `https://f1.thedblaster.id.vn` (f1-streamlit container, port 80 → 8501)
+- [ ] `psql` connects to Cloud SQL and `\dt` shows all 9 tables *(blocked: waiting for Hieu's sql/init.sql)*
+- [ ] `curl http://<VM_IP>:8086/health` returns InfluxDB healthy *(blocked: waiting for docker-compose deploy)*
+- [ ] `curl http://<VM_IP>:8080/health` returns Model API healthy *(blocked: waiting for Kien's model_serving code)*
+- [ ] `curl http://<VM_IP>:8501/_stcore/health` returns Streamlit healthy
 - [x] GCS buckets exist (4 buckets verified: raw, models, replay, dataproc-staging)
-- [x] Cloud SQL instance running (<CLOUD_SQL_IP>, db-f1-micro, user=f1admin)
-- [x] VM running (<VM_IP>, static IP `f1-chubby-static-ip`, e2-medium, COS 121)
-- [x] Docker Compose v2.35.1 installed on VM
-- [x] Artifact Registry repo created (f1-chubby, DOCKER) — Cloud Run module removed from Terraform, registry kept
+- [x] Cloud SQL instance running (34.21.160.55, db-f1-micro)
+- [x] VM running (34.124.140.104, e2-medium)
+- [x] Artifact Registry repo created (f1-chubby, DOCKER)
 - [x] Dataproc API enabled
-
-> **Status (Apr 20):** All provisioning complete. Domain `f1.thedblaster.id.vn` configured via Cloudflare (SSL Flexible). ETL script `scripts/load_historical_data.py` used to populate PostgreSQL (bypasses Spark Batch for initial data load).
 
 ---
 
@@ -228,13 +221,11 @@ Deploy the Model Serving API container on the GCE VM. Load pre-trained model art
 - Configure auto-restart policy (`restart: unless-stopped`)
 
 **Definition of Done:**
-- [x] `curl http://model-api:8080/health` returns 200 (from within Docker network)
-- [x] `POST /predict-inrace` returns in-race predictions with win/podium probabilities
-- [x] `POST /predict-prerace` returns pre-race podium probabilities
-- [x] Container auto-restarts (`restart: unless-stopped`)
-- [x] Models loaded from GCS (`gs://f1chubby-models-<PROJECT_ID>/`) on container startup, cached in Docker named volume
-
-> **Status (Apr 20):** Model API running as `f1-model-api` container. Using FastAPI + joblib. Endpoints: `/predict-inrace`, `/predict-prerace`. Models pulled from GCS on startup (`USE_GCS=true`). All 3 models loaded: `podium_model.pkl`, `in_race_win_model.pkl`, `in_race_podium_model.pkl`.
+- [ ] `curl http://<VM_IP>:8080/health` returns 200 with `model_loaded: true`
+- [ ] `curl -X POST http://<VM_IP>:8080/predict -H 'Content-Type: application/json' -d '<test_payload>'` returns in-race predictions with `confidence` and `inference_time_ms`
+- [ ] `curl -X POST http://<VM_IP>:8080/predict-prerace -H 'Content-Type: application/json' -d '<test_payload>'` returns pre-race podium probabilities
+- [ ] Container auto-restarts after VM reboot
+- [ ] Inference latency <500ms for a single-instance request
 
 ---
 
@@ -277,29 +268,24 @@ Deploy the Simulation Service container on the GCE VM and configure it to publis
 Deploy the Streamlit container on the GCE VM as part of the docker-compose stack. Verify it can connect to all data sources.
 
 **Requirements:**
-- Build Streamlit image on VM via `docker compose up --build` (images built locally on VM, no registry push needed)
+- Build Streamlit image on VM (or push to Artifact Registry and pull)
 - Deploy via `docker compose up -d` alongside existing services (InfluxDB, Model API, Simulation Service)
 - Mount FastF1 cache as host volume (`./f1_cache:/app/f1_cache`) for persistent cache across restarts
 - Set environment variables:
   - `INFLUXDB_URL=http://influxdb:8086` (internal Docker network)
   - `INFLUXDB_TOKEN=<token>`
   - `MODEL_API_URL=http://model-api:8080` (internal Docker network)
-  - `POSTGRES_HOST=<Cloud SQL IP>`, `POSTGRES_PORT=5432`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`
-- Verify Streamlit is accessible at `https://f1.thedblaster.id.vn`
+  - `PG_HOST=<Cloud SQL IP>`, `PG_PORT=5432`, `PG_USER`, `PG_PASSWORD`, `PG_DATABASE`
+- Verify Streamlit is accessible at `http://<VM_IP>:8501`
 - Configure `restart: unless-stopped` for auto-restart after VM reboot
-- Verify port 80 is open in VPC firewall rules
+- Verify port 8501 is open in VPC firewall rules
 
 **Definition of Done:**
-- [x] Streamlit dashboard accessible at `https://f1.thedblaster.id.vn`
-- [x] Dashboard loads without errors (home page, drivers, constructors, race details all work)
-- [x] FastF1 cache persists across container restarts (host volume mount `./f1_cache:/app/f1_cache`)
-- [x] All environment variables correctly configured (PostgreSQL, InfluxDB, Model API)
-- [x] Container auto-restarts after VM reboot
-- [x] Historical data served from Cloud SQL PostgreSQL with FastF1 fallback
-- [x] Fastest lap data populated via ETL (best_lap_ms from session.laps for Race/Sprint)
-- [x] `selected_year` session state initialized before first use (no KeyError on first visit)
-
-> **Status (Apr 20):** Fully deployed. 3 containers running: f1-streamlit (port 80→8501), f1-model-api (8080 internal), f1-influxdb (8086). Static IP `<VM_IP>`. Cloudflare domain configured.
+- [ ] Streamlit dashboard accessible at `http://<VM_IP>:8501`
+- [ ] Dashboard loads without errors (no broken DB connections)
+- [ ] FastF1 cache persists across container restarts
+- [ ] All environment variables correctly configured
+- [ ] Container auto-restarts after VM reboot
 
 ---
 

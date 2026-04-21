@@ -84,6 +84,7 @@ module "compute" {
   source = "./modules/compute"
 
   project_id   = var.project_id
+  region       = var.region
   zone         = var.zone
   machine_type = var.vm_machine_type
   subnet_id    = module.networking.subnet_id
