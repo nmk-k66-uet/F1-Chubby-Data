@@ -1,0 +1,130 @@
+# Local development stack — replicates production behavior
+#
+# Quick start:
+#   cp .env.dev.example .env
+#   docker compose -f docker-compose.dev.yml up --build
+#
+# On first run, the ETL service seeds PostgreSQL (~5 min with f1_cache, ~30 min cold).
+# Streamlit starts only after ETL completes. Subsequent runs skip ETL if data exists.
+# The FastF1 cache (f1_cache/) is shared between ETL and Streamlit containers.
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: f1-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: f1chubby
+      POSTGRES_USER: f1admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localdev123}
+    volumes:
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U f1admin -d f1chubby"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  influxdb:
+    image: influxdb:2.7
+    container_name: f1-influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD:-f1chubby2026}
+      DOCKER_INFLUXDB_INIT_ORG: f1chubby
+      DOCKER_INFLUXDB_INIT_BUCKET: live_race
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN:-f1chubby-influx-token}
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    restart: unless-stopped
+
+  model-api:
+    build: ./model_serving
+    container_name: f1-model-api
+    ports:
+      - "8080:8080"
+    environment:
+      MODEL_DIR: /app/models
+      USE_GCS: "false"
+    volumes:
+      - ./assets/Models:/app/models:ro
+      - ./model_serving/app.py:/app/app.py
+    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
+    depends_on:
+      - influxdb
+    restart: unless-stopped
+
+  streamlit:
+    build: .
+    container_name: f1-streamlit
+    ports:
+      - "8501:8501"
+    environment:
+      MODEL_API_URL: http://model-api:8080
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-f1chubby-influx-token}
+      INFLUXDB_ORG: f1chubby
+      INFLUXDB_BUCKET: live_race
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: f1chubby
+      POSTGRES_USER: f1admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localdev123}
+      LOCAL_MODE: "false"
+    volumes:
+      - ./main.py:/app/main.py
+      - ./core:/app/core
+      - ./components:/app/components
+      - ./pages:/app/pages
+      - ./assets:/app/assets
+      - ./f1_cache:/app/f1_cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      model-api:
+        condition: service_started
+      influxdb:
+        condition: service_started
+      etl:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # One-shot ETL: seeds PostgreSQL with FastF1 historical data
+  # Runs automatically on first `docker compose up`, exits when done.
+  # Safe to re-run — all inserts use ON CONFLICT DO UPDATE.
+  etl:
+    build: .
+    container_name: f1-etl
+    restart: "no"
+    entrypoint:
+      - python
+      - scripts/load_historical_data.py
+      - --host
+      - postgres
+      - --user
+      - f1admin
+      - --password
+      - ${POSTGRES_PASSWORD:-localdev123}
+      - --init-schema
+      - --skip-if-seeded
+      - --offline
+      - --years
+      - "2024"
+      - "2025"
+      - "2026"
+    volumes:
+      - ./scripts:/app/scripts:ro
+      - ./f1_cache:/app/f1_cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  influxdb-data:

@@ -315,7 +315,22 @@ def main():
     parser.add_argument("--user", default=os.environ.get("POSTGRES_USER", "postgres"))
     parser.add_argument("--password", default=os.environ.get("POSTGRES_PASSWORD", ""))
     parser.add_argument("--init-schema", action="store_true", help="Run sql/init.sql before loading")
+    parser.add_argument("--skip-if-seeded", action="store_true", help="Exit early if session_results already has data")
+    parser.add_argument("--offline", action="store_true", help="Use only FastF1 cache, block all API calls")
     args = parser.parse_args()
+
+    if args.offline:
+        # Block HTTP requests at the adapter level.
+        # requests_cache serves cached responses at the Session level (before
+        # reaching the adapter), so cache hits still work. Cache misses hit
+        # the adapter where we raise, and the existing try/except skips them.
+        import requests
+        def _blocked_send(self, request, **kwargs):
+            raise requests.exceptions.ConnectionError(
+                f"Blocked by --offline: {request.method} {request.url}"
+            )
+        requests.adapters.HTTPAdapter.send = _blocked_send
+        print("Offline mode: using FastF1 cache only, no API calls")
 
     if not args.password:
         print("ERROR: --password or POSTGRES_PASSWORD env required")
@@ -323,6 +338,17 @@ def main():
 
     conn = _connect(args)
     print(f"Connected to {args.host}:{args.port}/{args.db}")
+
+    if args.skip_if_seeded:
+        with conn.cursor() as cur:
+            cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='session_results')")
+            if cur.fetchone()[0]:
+                cur.execute("SELECT count(*) FROM session_results")
+                count = cur.fetchone()[0]
+                if count > 0:
+                    print(f"Database already seeded ({count} rows in session_results). Skipping.")
+                    conn.close()
+                    return
 
     if args.init_schema:
         schema_path = os.path.join(os.path.dirname(__file__), "..", "sql", "init.sql")
