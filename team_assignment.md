@@ -55,7 +55,7 @@ Write Terraform config in `infra/` directory that provisions all GCP resources f
 **Requirements:**
 - Root module: `infra/main.tf`, `infra/variables.tf`, `infra/outputs.tf`, `infra/terraform.tfvars`
 - Modules in `infra/modules/`:
-  - `networking/` — VPC network, firewall rules (allow SSH, HTTP 8501 for Streamlit, 8086 for InfluxDB, 8080 for Model API, internal traffic)
+  - `networking/` — VPC network, firewall rules (allow SSH, HTTP 80 for Streamlit, 8080 for Model API, 8086 for InfluxDB, internal traffic)
   - `pubsub/` — 3 topics (`f1-telemetry`, `f1-timing`, `f1-race-control`) + 6 subscriptions (`*-viz-fast`, `*-pred-slow`)
   - `storage/` — 3 GCS buckets (`f1chubby-raw`, `f1chubby-models`, `f1chubby-replay`), Standard class, `asia-southeast1`
   - `database/` — Cloud SQL PostgreSQL instance, `db-f1-micro`, activation policy `NEVER` by default (start manually)
@@ -86,7 +86,7 @@ Write Terraform config in `infra/` directory that provisions all GCP resources f
 | **Blocks** | — (enhancement, not critical path) |
 
 **Spec:**
-Create 5 GitHub Actions workflow files in `.github/workflows/` for automated deployment.
+Create 4 GitHub Actions workflow files in `.github/workflows/` for automated deployment.
 
 **Requirements:**
 1. `terraform.yml` — Runs `terraform plan` on PR, `terraform apply` on merge to `main`. Uses `google-github-actions/auth@v2` with Workload Identity Federation.

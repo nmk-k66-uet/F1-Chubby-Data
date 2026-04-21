@@ -11,9 +11,9 @@ Detailed view of individual team/constructor performance:
 
 import streamlit as st
 import pandas as pd
-import requests
 import base64
 import os
+from core import db
 
 TEAM_COLORS = {
     "red bull": "#3671C6", "mercedes": "#00D2BE", "ferrari": "#DC0000",
@@ -79,14 +79,48 @@ def get_team_color(team_name):
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_constructors_data(year):
-    """Lấy Bảng xếp hạng Đội đua từ API và ghép với tên tay đua & số Podiums"""
+    """Fetch constructor standings from PostgreSQL, fallback to Ergast API."""
     teams_data = []
+
+    # --- Try PostgreSQL first ---
+    max_round_rows = db.query(
+        "SELECT MAX(round) as max_round FROM constructor_standings WHERE year=%s", (year,)
+    )
+    max_round = max_round_rows[0]["max_round"] if max_round_rows and max_round_rows[0]["max_round"] else None
+
+    if max_round is not None:
+        c_rows = db.query(
+            "SELECT cs.constructor_name, cs.position, cs.points, cs.wins, "
+            "COALESCE(pod.podiums, 0) as podiums "
+            "FROM constructor_standings cs "
+            "LEFT JOIN ("
+            "  SELECT team_name, COUNT(*) as podiums "
+            "  FROM session_results "
+            "  WHERE year=%s AND session_type='R' AND position <= 3 "
+            "  GROUP BY team_name"
+            ") pod ON cs.constructor_name = pod.team_name "
+            "WHERE cs.year=%s AND cs.round=%s "
+            "ORDER BY cs.position",
+            (year, year, max_round),
+        )
+        if c_rows:
+            for c in c_rows:
+                teams_data.append({
+                    "pos": str(c["position"]),
+                    "points": str(int(c["points"])) if c["points"] == int(c["points"]) else str(c["points"]),
+                    "wins": str(c["wins"]),
+                    "podiums": str(c["podiums"]),
+                    "name": c["constructor_name"],
+                })
+            return teams_data
+
+    # --- Fallback: Ergast API ---
+    import requests as _requests
     try:
-        # Bước 1: Đếm số Podiums (Top 3) từ kết quả các chặng đua
         podium_counts = {}
         try:
             res_url = f"https://api.jolpi.ca/ergast/f1/{year}/results.json?limit=1000"
-            res_data = requests.get(res_url, timeout=8).json()
+            res_data = _requests.get(res_url, timeout=8).json()
             races = res_data.get('MRData', {}).get('RaceTable', {}).get('Races', [])
             for race in races:
                 for result in race.get('Results', []):
@@ -95,9 +129,8 @@ def fetch_constructors_data(year):
                         podium_counts[c_id] = podium_counts.get(c_id, 0) + 1
         except Exception: pass
 
-        # Bước 2: Lấy Bảng xếp hạng đội đua
         cr_url = f"https://api.jolpi.ca/ergast/f1/{year}/constructorStandings.json?limit=100"
-        cr_res = requests.get(cr_url, timeout=5).json()
+        cr_res = _requests.get(cr_url, timeout=5).json()
         cr_lists = cr_res.get('MRData', {}).get('StandingsTable', {}).get('StandingsLists', [])
         
         if cr_lists:

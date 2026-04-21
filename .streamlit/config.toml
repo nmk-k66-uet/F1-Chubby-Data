@@ -15,6 +15,10 @@ textColor="#FFFFFF"
 primaryColor="#E10600"
 
 [server]
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+address = "0.0.0.0"
 runOnSave = true
 
 [client]

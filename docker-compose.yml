@@ -1,0 +1,62 @@
+version: "3.8"
+
+services:
+  influxdb:
+    image: influxdb:2.7
+    container_name: f1-influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD:-f1chubby2026}
+      DOCKER_INFLUXDB_INIT_ORG: f1chubby
+      DOCKER_INFLUXDB_INIT_BUCKET: live_race
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN:-f1chubby-influx-token}
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    restart: unless-stopped
+
+  model-api:
+    build: ./model_serving
+    container_name: f1-model-api
+    # No host port — internal only (accessed as model-api:8080 on docker network)
+    expose:
+      - "8080"
+    environment:
+      MODEL_DIR: /app/models
+      GCS_BUCKET: ${GCS_MODELS_BUCKET:-f1chubby-models-gen-lang-client-0314607994}
+      USE_GCS: ${USE_GCS:-true}
+    volumes:
+      - model-cache:/app/models
+    depends_on:
+      - influxdb
+    restart: unless-stopped
+
+  streamlit:
+    build: .
+    container_name: f1-streamlit
+    ports:
+      - "80:8501"
+    environment:
+      MODEL_API_URL: http://model-api:8080
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-f1chubby-influx-token}
+      INFLUXDB_ORG: f1chubby
+      INFLUXDB_BUCKET: live_race
+      POSTGRES_HOST: ${POSTGRES_HOST:-}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-f1chubby}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      LOCAL_MODE: ${LOCAL_MODE:-false}
+    volumes:
+      - ./f1_cache:/app/f1_cache
+    depends_on:
+      - model-api
+      - influxdb
+    restart: unless-stopped
+
+volumes:
+  influxdb-data:
+  model-cache:

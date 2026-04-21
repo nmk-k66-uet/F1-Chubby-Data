@@ -41,8 +41,10 @@ flowchart LR
         MLAPI[Model Serving API]
     end
 
-    subgraph Visualization
-        UI[Streamlit App<br/>Cloud Run]
+    subgraph "GCE VM (docker-compose)"
+        INFLUX
+        MLAPI
+        UI[Streamlit App]
     end
 
     FIA --> DC --> GCS
@@ -239,29 +241,28 @@ flowchart TD
 - **Role:** Serving database for all historical/batch-processed data.
 - **Deployment:** Cloud SQL for PostgreSQL.
 - **Instance:** db-f1-micro (shared-core, 0.6 GB RAM). **Stopped when idle** to save cost.
+- **Current Status:** ✅ Deployed at `<CLOUD_SQL_IP>`, database `f1chubby`, user `f1admin`. Data loaded for 2024 (1,078 session results, 24 rounds standings), 2025 (1,079 session results, 24 rounds standings), 2026 (154 session results, 3 rounds standings).
 - **Why PostgreSQL over InfluxDB for historical data:**
   - Dashboard queries involve complex SQL: `GROUP BY`, `ORDER BY`, `JOIN`, window functions.
   - FastF1 data is fundamentally relational: results are tabular, laps indexed by LapNumber (not timestamp), telemetry indexed by Distance (meters).
   - InfluxDB's Flux query language cannot express multi-key aggregations, pivots, or JOINs.
 
-- **Tables:**
+- **Tables (deployed via `sql/init.sql`):**
 
   | Table | Source | Contents | Dashboard View |
   |-------|--------|----------|----------------|
-  | `race_calendar` | Spark Batch | Season schedules, event dates, circuits, country codes | Calendar page |
-  | `session_results` | Spark Batch | Finishing order, grid, points, status, times per driver per session | Results tab |
-  | `driver_standings` | Spark Batch | Championship points after each round | Standings page |
-  | `constructor_standings` | Spark Batch | Constructor championship points after each round | Standings page |
-  | `lap_times` | Spark Batch | Lap-by-lap times, compounds, stints, tyre life | Lap times chart, strategy analysis |
-  | `telemetry_summary` | Spark Batch | Aggregated sector speeds, top speeds per session per driver | Telemetry comparison |
-  | `ml_features` | Spark Batch | Engineered features for ML (grid position, qualifying delta, pace delta, driver form, team tier) | Feature store, pre-race predictions |
-  | `prediction_accuracy` | Spark Batch | Historical prediction vs. actual results | Model accuracy dashboard |
-  | `data_quality` | Spark Batch | Row count validation, schema checks per season/table | Pipeline health panel |
+  | `race_calendar` | ETL script (`scripts/load_historical_data.py`) | Season schedules, event dates, circuits, country codes, event format | Calendar page, home page |
+  | `session_results` | ETL script | Finishing order, grid, points, status, Q1/Q2/Q3 times, best lap time per driver per session (Q/R/S) | Results tab, event highlights |
+  | `driver_standings` | ETL script (computed from `session_results`) | Cumulative championship points and wins after each round | Drivers page |
+  | `constructor_standings` | ETL script (computed from `session_results`) | Constructor championship points and wins after each round | Constructors page |
+
+  > **Note:** Additional tables (`lap_times`, `telemetry_summary`, `ml_features`, `prediction_accuracy`, `data_quality`) are planned for Phase 2 when Spark Batch is integrated. The ETL script populates the 4 core tables directly from FastF1.
 
 #### InfluxDB — Live Streaming Data
 
 - **Role:** Serving database for live/simulated race data and real-time predictions.
-- **Deployment:** InfluxDB 2.x OSS in Docker on the GCE VM (shared with Simulation Service + Model Serving API).
+- **Deployment:** InfluxDB 2.7 OSS in Docker on the GCE VM via docker-compose. Auto-initialized with org `f1chubby`, bucket `live_race`, admin token via env var.
+- **Current Status:** ✅ Running as `f1-influxdb` container on VM (`<VM_IP>:8086`). Buckets will be populated when Spark Streaming is integrated.
 - **Why InfluxDB for live data:** Append-heavy writes from streaming, time-indexed queries, short retention, no complex joins needed.
 
 - **Measurements:**
@@ -276,9 +277,10 @@ flowchart TD
 #### Model Serving API — Inference Endpoint
 
 - **Role:** Decoupled inference service that loads trained models and exposes a REST prediction endpoint. The Spark Streaming slow path computes features and calls this API instead of running inference inline.
-- **Deployment:** Containerized on the GCE VM (shared with InfluxDB + Simulation Service) via docker-compose.
-- **Technology:** Abstract — team chooses implementation (MLflow Model Serving, FastAPI + joblib, BentoML, or other). The interface contract is fixed.
-- **Why decoupled serving:**
+- **Deployment:** Containerized on the GCE VM (shared with InfluxDB + Streamlit) via docker-compose.
+- **Technology:** FastAPI + joblib (implemented in `model_serving/app.py`). Downloads models from GCS bucket (`gs://f1chubby-models-<PROJECT_ID>/`) on startup, caches in a Docker named volume.
+- **Current Status:** ✅ Running as `f1-model-api` container on VM. Models pulled from GCS on startup (3 artifacts: `podium_model.pkl`, `in_race_win_model.pkl`, `in_race_podium_model.pkl`). Endpoints: `POST /predict-inrace`, `POST /predict-prerace`, `GET /health`. Returns normalized probabilities.
+- **Why decoupled serving:
   - Model can be **updated without restarting** the Spark Streaming job (hot-swap model versions).
   - Shows **separation of concerns** — feature computation (Spark) vs. model inference (API) are independent.
   - The serving layer is a standard production ML pattern (grading differentiator).
@@ -320,6 +322,36 @@ flowchart TD
   ```
   GET /health
   → 200 {"status": "healthy", "model_loaded": true, "model_version": "in_race_v1"}
+  ```
+
+  ```
+  POST /predict-prerace
+  Content-Type: application/json
+
+  Request:
+  {
+    "year": 2024,
+    "round": 1,
+    "features": [
+      {
+        "driver": "VER",
+        "GridPosition": 1,
+        "TeamTier": 1,
+        "QualifyingDelta": 0.0,
+        "FP2_PaceDelta": 0.0,
+        "DriverForm": 0.95
+      }
+    ]
+  }
+
+  Response:
+  {
+    "predictions": [
+      {"driver": "VER", "podium_probability": 0.92}
+    ],
+    "model_version": "pre_race_v1",
+    "inference_time_ms": 8
+  }
   ```
 
 - **Candidate Implementations (team decides):**
@@ -416,7 +448,7 @@ flowchart LR
 - **Features:** GridPosition, TeamTier, QualifyingDelta, FP2_PaceDelta, DriverForm (from `DataCrawler.py` feature engineering).
 - **Target:** Podium probability (binary: top 3 finish).
 - **Training:** Spark Batch job, scikit-learn RandomForest.
-- **Inference:** Run once per race as batch, results stored in PostgreSQL `prediction_accuracy`.
+- **Inference:** Model Serving API `POST /predict-prerace`, called by the Streamlit dashboard when user clicks "Generate Predictions". Results also stored in PostgreSQL `prediction_accuracy` for historical accuracy tracking.
 - **Purpose:** "Before the race starts, here's who we think will podium."
 
 #### In-Race Model
@@ -483,7 +515,13 @@ flowchart TD
 
 - **High-Resolution Telemetry:** Race replay, track dominance, and gear maps require 100ms-interpolated X/Y coordinates and per-meter Distance indexing. This data is too granular for either database to serve efficiently. **Keep the existing FastF1 cache + Pandas in-memory approach.** The batch pipeline loads summary-level telemetry to PostgreSQL; full-resolution telemetry is served from cache.
 
-- **Deployment:** Cloud Run (serverless container, scales to zero).
+- **Deployment:** Docker container on the GCE VM via `docker-compose`, co-located with InfluxDB and Model Serving API. Accessible at `https://f1.thedblaster.id.vn` via Cloudflare (SSL Flexible, proxied A record → `<VM_IP>`). Port mapping: host 80 → container 8501. FastF1 cache persists on the VM's disk via a host volume mount (`./f1_cache:/app/f1_cache`), eliminating cold-start data loading issues. The Streamlit container uses a separate `requirements-streamlit.txt` (excludes `scikit-learn`/`joblib`) for a lighter image — all ML inference is handled by the Model Serving API, not inline.
+- **Current Status:** ✅ Live at `https://f1.thedblaster.id.vn`. Home page, drivers standings, constructors standings, and race details pages all serve data from Cloud SQL PostgreSQL with FastF1 fallback. Pre-race and in-race predictions route through the Model Serving API.
+
+- **ML Decoupling:**
+  - **In-race predictions:** The Streamlit app reads predictions from InfluxDB `predictions` measurement (written by the Spark Streaming slow path via the Model Serving API). It does **not** import `ml_core.py` or load `.pkl` files. A staleness indicator shows when predictions are stale (>15s yellow, >30s red).
+  - **Pre-race predictions:** The Streamlit app sends features to the Model Serving API via `POST /predict-prerace` and displays the returned probabilities. The interactive "Generate Predictions" button is preserved.
+  - **Local development mode:** A `LOCAL_MODE` environment variable preserves the existing FastF1-slicing + inline inference behavior for development without the full pipeline running.
 
 ---
 
@@ -496,9 +534,8 @@ flowchart TD
 | Pub/Sub Topics + Subscriptions | Cloud Pub/Sub | 3 topics, 6 subscriptions | Streaming message bus |
 | Storage Buckets | Cloud Storage | Standard, `asia-southeast1` | Raw data, models, replay cache |
 | PostgreSQL Instance | Cloud SQL | db-f1-micro (stop when idle) | Historical analytics serving DB |
-| Virtual Machine | Compute Engine | e2-medium (2 vCPU, 4 GB) | Hosts InfluxDB + SimService + Model Serving API |
+| Virtual Machine | Compute Engine | e2-medium (2 vCPU, 4 GB), static IP `<VM_IP>` | Hosts InfluxDB + Model Serving API + Streamlit (docker-compose) |
 | Spark Clusters | Dataproc | Single-node n1-standard-4, auto-delete | Batch + 2× Streaming jobs |
-| Streamlit Dashboard | Cloud Run | Serverless container | Dashboard (scales to zero) |
 
 ### Infrastructure Topology
 
@@ -510,11 +547,10 @@ flowchart TD
         end
 
         subgraph Compute
-            VM[GCE: e2-medium<br/>Docker: InfluxDB + SimService<br/>+ Model Serving API]
+            VM[GCE: e2-medium<br/>Docker: InfluxDB + SimService<br/>+ Model Serving API + Streamlit]
             DP_BATCH[Dataproc Cluster 1<br/>Batch Job]
             DP_FAST[Dataproc Cluster 2<br/>Streaming Fast Path]
             DP_SLOW[Dataproc Cluster 3<br/>Streaming Slow Path]
-            CR[Cloud Run<br/>Streamlit]
         end
 
         subgraph Data
@@ -545,8 +581,7 @@ All resources provisioned via **Terraform** (`infra/main.tf`):
 | Cloud SQL db-f1-micro (~4 days active, stopped otherwise) | ~$3 |
 | Compute Engine e2-medium (8 days) | ~$6 |
 | Dataproc single-node (~10 hrs compute total) | ~$3 |
-| Cloud Run (Streamlit, low traffic) | ~$0.50 |
-| **Total** | **~$13** |
+| **Total** | **~$12.60** |
 
 > **$300 GCP free trial credits available.** Cost is essentially zero. Track usage anyway for the project report. Delete all resources after demo.
 
@@ -555,7 +590,6 @@ All resources provisioned via **Terraform** (`infra/main.tf`):
 - **Stop Cloud SQL** when not actively developing (`gcloud sql instances patch <instance> --activation-policy NEVER`).
 - **Stop the VM** when not developing (`gcloud compute instances stop`).
 - **Auto-delete** Dataproc batch clusters after job completes (`--max-idle` flag for streaming clusters).
-- **Cloud Run scales to zero** — no cost when not serving traffic.
 - **Delete all resources** after the demo (`terraform destroy`).
 
 ---
@@ -648,13 +682,13 @@ gantt
 |---|------|------------|-------------|
 | 0.1 | Design Cloud SQL PostgreSQL schema (tables, columns, types, indexes, FK constraints) + InfluxDB measurements (4 live: tags, fields, timestamp semantics) | — | 4 hrs |
 | 0.2 | Implement `MLCore.py`: pre-race model (podium classifier on DataCrawler features) + in-race model (position predictor on live features). Training + serialized prediction interface. | — | 5 hrs |
-| 0.2b | Define Model Serving API contract (REST interface: POST /predict request/response schema, GET /health, error handling). Technology-agnostic. | 0.2 | 1 hr |
+| 0.2b | Define Model Serving API contract (REST interface: POST /predict for in-race, POST /predict-prerace for pre-race, GET /health, error handling). Technology-agnostic. | 0.2 | 1 hr |
 | 0.3 | Extend `DataCrawler.py`: add `google-cloud-storage` upload after extraction. Validate 2018–2025 coverage (telemetry from 2019+, results from 2018+). | — | 2 hrs |
 | 0.4 | Build Simulation Service: read cached race from GCS → replay to Pub/Sub at configurable speed (using `google-cloud-pubsub` publisher) | — | 4 hrs |
 | 0.4b | Define Pub/Sub message JSON schemas for all 3 topics (in `/schemas/` directory) | — | 1.5 hrs |
 | 0.5 | Pre-cache 2–3 race replays as parquet (interpolated to 10 Hz unified timeline) | 0.4 | 1 hr |
-| 0.6 | Dockerize InfluxDB + Simulation Service + Model Serving API (`docker-compose.yml` for local testing) | 0.1, 0.2b, 0.4 | 2.5 hrs |
-| 0.7 | Dockerize Streamlit app | — | 1 hr |
+| 0.6 | Dockerize InfluxDB + Simulation Service + Model Serving API + Streamlit (`docker-compose.yml` for local testing + VM deployment) | 0.1, 0.2b, 0.4 | 2.5 hrs |
+| 0.7 | Dockerize Streamlit app for VM deployment (use `requirements-streamlit.txt`, mount FastF1 cache volume) | — | 1 hr |
 | 0.8 | Write Terraform config (`infra/`) — all GCP resources parameterized, Terraform Cloud backend | — | 3 hrs |
 
 **Phase 0 subtotal: ~25 hrs**
@@ -666,8 +700,8 @@ gantt
 | 1.1 | Deploy Terraform (`terraform apply`), upload raw data + replay cache to GCS | 0.3, 0.5, 0.8 | 30 min |
 | 1.2 | Verify Pub/Sub topics + subscriptions created by Terraform | 0.8 | 10 min |
 | 1.3 | Verify Cloud SQL PostgreSQL instance, create tables + indexes from schema DDL | 0.1, 0.8 | 20 min |
-| 1.4 | VM: verify Docker installed via startup script, deploy InfluxDB + Model Serving API containers, initialize InfluxDB buckets | 0.1, 0.2b, 0.8 | 30 min |
-| 1.5 | Verify Cloud Run service + Dataproc API enabled | 0.8 | 10 min |
+| 1.4 | VM: verify Docker installed via startup script, deploy InfluxDB + Model Serving API + Streamlit containers, initialize InfluxDB buckets | 0.1, 0.2b, 0.8 | 30 min |
+| 1.5 | Verify Dataproc API enabled, Streamlit accessible on VM port 8501 | 0.8 | 10 min |
 
 **Phase 1 subtotal: ~1.5 hrs**
 
@@ -680,10 +714,10 @@ gantt
 | 2.3 | Spark Streaming fast path on Dataproc: Pub/Sub → parse/validate JSON → enrich metadata → InfluxDB live measurements | 1.2, 1.4, 1.5, 0.4b | 6 hrs | B |
 | 2.4 | Spark Streaming slow path on Dataproc: Pub/Sub → windowed features → call Model Serving API → write predictions to InfluxDB | 1.2, 1.4, 1.5, 2.1, 2.2 | 7 hrs | B (after 2.1, 2.2) |
 | 2.5 | Configure Simulation Service on VM to produce to Pub/Sub | 1.2, 1.4, 0.4 | 2 hrs | C |
-| 2.6 | Streamlit: add live race panels (tracker, timing board, race control feed, AI predictions + staleness indicator) — InfluxDB | 0.1 | 5 hrs | C |
+| 2.6 | Streamlit: add live race panels (tracker, timing board, race control feed, AI predictions + staleness indicator) — reads from InfluxDB, no inline ML inference | 0.1 | 5 hrs | C |
 | 2.7 | Streamlit: add Cloud SQL PostgreSQL query layer for historical views (SQL queries alongside existing FastF1 cache logic) | 1.3, 2.1 | 4 hrs | A (after 2.1) |
 | 2.8 | Streamlit: add pipeline health panel (Pub/Sub backlog, DB freshness, Dataproc job status, Model API /health, data quality) | 2.1, 2.2, 2.4 | 3 hrs | C (after 2.1, 2.2) |
-| 2.9 | Deploy Streamlit app to Cloud Run | 2.6, 2.7, 2.8 | 1 hr | — |
+| 2.9 | Deploy Streamlit app on VM via docker-compose (mount FastF1 cache, configure env vars for InfluxDB/Model API/PostgreSQL) | 2.6, 2.7, 2.8 | 1 hr | — |
 
 **Phase 2 subtotal: ~40 hrs**
 
@@ -708,9 +742,9 @@ gantt
 
 | # | Task | Depends On | Est. Effort |
 |---|------|------------|-------------|
-| 4.1 | Start VM (InfluxDB + Simulation Service + Model Serving API) + start Cloud SQL instance | 3.9 | 5 min |
+| 4.1 | Start VM (InfluxDB + Simulation Service + Model Serving API + Streamlit) + start Cloud SQL instance | 3.9 | 5 min |
 | 4.2 | Submit both Dataproc Streaming jobs | 3.9 | 3 min |
-| 4.3 | Verify Streamlit app is live on Cloud Run, pipeline health panel green | 3.9 | 2 min |
+| 4.3 | Verify Streamlit app is live on VM, pipeline health panel green | 3.9 | 2 min |
 | 4.4 | Run demo: architecture walkthrough (~5 min) + live simulation (~15–18 min) | 4.1–4.3 | 25 min |
 | 4.5 | **Tear down: `terraform destroy`** | 4.4 | 5 min |
 
@@ -757,7 +791,7 @@ flowchart TD
     end
 
     A3 -->|trained model| B3
-    A4 & B6 & C5 --> DEPLOY[2.9 Deploy to Cloud Run]
+    A4 & B6 & C5 --> DEPLOY[2.9 Deploy Streamlit on VM]
     DEPLOY --> TEST[3.5–3.9 E2E Testing]
 ```
 
@@ -813,7 +847,17 @@ ML inference abstracted behind a REST API (POST /predict, GET /health). Technolo
 
 ### 8. GCP over Azure
 
-$300 free trial credits. Pub/Sub is a simpler message bus than Event Hubs (no capacity units). Dataproc is pure open-source Spark (no vendor lock-in like Databricks). Cloud Run scales to zero. Terraform is cloud-agnostic IaC (more widely used than Bicep).
+$300 free trial credits. Pub/Sub is a simpler message bus than Event Hubs (no capacity units). Dataproc is pure open-source Spark (no vendor lock-in like Databricks). Terraform is cloud-agnostic IaC (more widely used than Bicep).
+
+### 9. Streamlit on VM (not Cloud Run)
+
+The Streamlit dashboard runs as a Docker container on the GCE VM via `docker-compose`, co-located with InfluxDB, Model Serving API, and Simulation Service. Rationale:
+- **Persistent FastF1 cache:** High-resolution telemetry (replay, track dominance, gear maps) requires ~2–5 GB of FastF1 cache on disk. Cloud Run containers are ephemeral — the cache would need to be re-downloaded on every cold start or baked into the image (bloating it to 5–10 GB).
+- **Co-location with InfluxDB:** Live race views query InfluxDB at sub-second intervals. Running on the same VM eliminates network latency for these queries.
+- **No cold start:** Cloud Run scales to zero, meaning the first request after idle incurs a cold start (loading FastF1 cache + large dependencies). On the VM, the container is always warm.
+- **Cost neutral:** The VM is already running 24/7 for InfluxDB. Adding Streamlit costs $0 incremental.
+- **ML decoupling:** The Streamlit container does **not** import `ml_core.py` or load `.pkl` model files. In-race predictions are read from InfluxDB (written by the streaming slow path). Pre-race predictions are fetched via HTTP from the Model Serving API (`POST /predict-prerace`). This uses a separate `requirements-streamlit.txt` without `scikit-learn`/`joblib` for a lighter image.
+- **Trade-off:** No auto-scaling. For a demo with 1–2 concurrent users, this is acceptable.
 
 ---
 
@@ -824,8 +868,8 @@ $300 free trial credits. Pub/Sub is a simpler message bus than Event Hubs (no ca
 | Cloud SQL PostgreSQL down | Historical views fall back to FastF1 cache (existing code path still works) |
 | Pub/Sub / Streaming down | Pre-recorded video of live panels + architecture walkthrough |
 | Dataproc clusters fail to start | Show batch results already in Cloud SQL PostgreSQL + explain streaming design |
-| Model Serving API down | Slow path writes "prediction unavailable" to InfluxDB; fast path + live viz unaffected |
-| Worst case (all GCP down) | Full demo locally: Streamlit + FastF1 cache + architecture diagram |
+| Model Serving API down | Slow path writes "prediction unavailable" to InfluxDB; fast path + live viz unaffected. Pre-race predictions show "unavailable" in UI |
+| VM down (all services) | Restart VM; all containers auto-restart via docker-compose `restart: unless-stopped`. FastF1 cache persists on disk. If unrecoverable: demo with architecture diagrams + pre-recorded video |
 
 ---
 
@@ -835,48 +879,56 @@ $300 free trial credits. Pub/Sub is a simpler message bus than Event Hubs (no ca
 F1-Chubby-Data/
 ├── Dashboard.py                 # Main Streamlit app (extend with PG + InfluxDB)
 ├── DataCrawler.py               # Extend with GCS upload
-├── MLCore.py                    # NEW — Pre-race + in-race models
+├── MLCore.py                    # NEW — Pre-race + in-race models (training only)
 ├── SimulationService.py         # NEW — Pub/Sub replay producer
-├── docker-compose.yml           # NEW — InfluxDB + SimService + Model Serving API local dev
-├── Dockerfile                   # NEW — Streamlit container
-├── requirements.txt             # Updated with new dependencies
+├── docker-compose.yml           # InfluxDB + Model Serving API + Streamlit (3 services)
+├── Dockerfile                   # Streamlit container (uses requirements-streamlit.txt, port 8501)
+├── requirements.txt             # Full dependencies (batch/training)
+├── requirements-streamlit.txt   # Streamlit-only deps (no scikit-learn/joblib)
+├── .env.example                 # Template: PG, InfluxDB, GCS env vars
 ├── revised_plan.md              # This document
 ├── infra/
-│   ├── main.tf                  # NEW — Terraform root module
-│   ├── variables.tf             # NEW — Input variables
-│   ├── outputs.tf               # NEW — Connection strings, URLs
+│   ├── main.tf                  # Terraform root module
+│   ├── variables.tf             # Input variables
+│   ├── outputs.tf               # Connection strings, VM IP
 │   ├── modules/
-│   │   ├── networking/          # VPC, firewall rules
+│   │   ├── networking/          # VPC, firewall rules (incl. port 80 for Streamlit, 8080, 8086, SSH)
 │   │   ├── pubsub/              # Topics, subscriptions
 │   │   ├── storage/             # GCS buckets
 │   │   ├── database/            # Cloud SQL instance
 │   │   ├── compute/             # GCE VM
 │   │   ├── dataproc/            # Cluster templates
-│   │   └── cloudrun/            # Cloud Run service
+│   │   └── cloudrun/            # Artifact Registry repo (Cloud Run removed, kept for registry)
 │   └── terraform.tfvars         # Environment-specific values
 ├── model_serving/
-│   ├── Dockerfile               # NEW — Model Serving API container
-│   ├── app.py                   # NEW — REST API (POST /predict, GET /health)
-│   └── models/                  # Serialized model artifacts (.joblib)
+│   ├── Dockerfile               # Model Serving API container (python:3.11-slim + FastAPI + scikit-learn)
+│   ├── app.py                   # FastAPI REST API (POST /predict-inrace, POST /predict-prerace, GET /health)
+│   ├── requirements.txt         # ML deps: fastapi, scikit-learn, joblib, google-cloud-storage
+│   └── models/                  # Placeholder dir — models downloaded from GCS on startup
 ├── schemas/
-│   ├── f1-telemetry.json        # NEW — Pub/Sub message schema
-│   ├── f1-timing.json           # NEW — Pub/Sub message schema
-│   └── f1-race-control.json     # NEW — Pub/Sub message schema
+│   ├── f1-telemetry.json        # Pub/Sub message schema
+│   ├── f1-timing.json           # Pub/Sub message schema
+│   └── f1-race-control.json     # Pub/Sub message schema
+├── scripts/
+│   └── load_historical_data.py  # One-time ETL: FastF1 → Cloud SQL (calendar, results, standings)
 ├── sql/
-│   └── init.sql                 # NEW — PostgreSQL DDL (tables, indexes, FKs)
+│   └── init.sql                 # PostgreSQL DDL (4 tables: race_calendar, session_results, driver_standings, constructor_standings)
+├── core/
+│   ├── db.py                    # PostgreSQL connection pool + query helper
+│   ├── data_loader.py           # Data sources: PostgreSQL first, FastF1 fallback
+│   └── ...
 ├── spark/
-│   ├── batch_pipeline.py        # NEW — Spark Batch job
-│   ├── streaming_fast.py        # NEW — Spark Streaming fast path
-│   └── streaming_slow.py        # NEW — Spark Streaming slow path (calls Model API)
+│   ├── batch_pipeline.py        # Spark Batch job
+│   ├── streaming_fast.py        # Spark Streaming fast path
+│   └── streaming_slow.py        # Spark Streaming slow path (calls Model API)
 ├── .github/
 │   └── workflows/
-│       ├── terraform.yml        # NEW — Terraform plan/apply via GitHub Actions
-│       ├── deploy-streamlit.yml # NEW — Build + deploy to Cloud Run
-│       ├── deploy-vm.yml        # NEW — Docker images → GCE
-│       ├── deploy-dataproc.yml  # NEW — Submit Spark jobs
-│       └── upload-data.yml      # NEW — GCS data upload
+│       ├── terraform.yml        # Terraform plan/apply via GitHub Actions
+│       ├── deploy-vm.yml        # Deploy all services to VM (SCP + docker compose up)
+│       ├── deploy-dataproc.yml  # Submit Spark jobs
+│       └── upload-data.yml      # GCS data upload (raw data, replay cache, model artifacts)
 ├── assets/
 │   ├── Cars/
 │   └── Teams/
-└── f1_cache/                    # FastF1 local cache (gitignored)
+└── f1_cache/                    # FastF1 local cache (gitignored, mounted as volume on VM)
 ```
