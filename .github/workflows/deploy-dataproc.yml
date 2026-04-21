@@ -8,7 +8,8 @@ on:
         required: true
         type: choice
         options:
-          - batch
+          - etl
+          - training
           - streaming-fast
           - streaming-slow
           - all
@@ -57,11 +58,21 @@ jobs:
             --project ${{ env.PROJECT_ID }} \
             --bucket ${{ env.STAGING_BUCKET }} || true
 
-      - name: Submit Batch Job
-        if: inputs.job_type == 'batch' || inputs.job_type == 'all'
+      - name: Submit ETL Job
+        if: inputs.job_type == 'etl' || inputs.job_type == 'all'
         run: |
           gcloud dataproc jobs submit pyspark \
-            gs://${{ env.STAGING_BUCKET }}/spark/batch_pipeline.py \
+            gs://${{ env.STAGING_BUCKET }}/spark/etl_pipeline.py \
+            --cluster ${{ env.CLUSTER_NAME }} \
+            --region ${{ env.REGION }} \
+            --project ${{ env.PROJECT_ID }} \
+            --jars gs://spark-lib/postgres/postgresql-42.7.3.jar
+
+      - name: Submit Model Training Job
+        if: inputs.job_type == 'training' || inputs.job_type == 'all'
+        run: |
+          gcloud dataproc jobs submit pyspark \
+            gs://${{ env.STAGING_BUCKET }}/spark/training_pipeline.py \
             --cluster ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }}

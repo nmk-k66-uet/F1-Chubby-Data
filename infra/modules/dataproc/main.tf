@@ -1,4 +1,4 @@
-# Dataproc clusters are created on-demand via gcloud / GitHub Actions.
+# Dataproc cluster is created on-demand by GitHub Actions CI.
 # This module enables the API and creates a staging bucket.
 
 resource "google_project_service" "dataproc_api" {

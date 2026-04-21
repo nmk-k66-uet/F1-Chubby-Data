@@ -123,7 +123,7 @@ Write `spark/etl_pipeline.py` — reads raw data from GCS, transforms, writes to
 - Clean, normalize, resolve schema differences across seasons
 - Write to 4 PostgreSQL tables via JDBC: race_calendar, session_results, driver_standings, constructor_standings
 - Idempotent: `mode="overwrite"` for re-runs
-- Submit: `gcloud dataproc jobs submit pyspark spark/etl_pipeline.py --cluster=<batch-cluster> --jars=postgresql-42.x.jar`
+- Deploy via **GitHub Actions** only (`Actions → Deploy Dataproc Jobs → etl`)
 
 **Done when:**
 - [ ] Job completes on Dataproc (exit code 0)
@@ -305,36 +305,139 @@ Also help other team members with slide content for their sections.
 
 ---
 
-## Remaining Timeline (Apr 21 →)
+## Remaining Timeline (Apr 21 → Demo Apr 25)
 
 ```
-Apr 21–23 (3 days):
+Apr 21–22 (2 days):
   Hieu:  0.3 DataCrawler GCS upload → start 2.1a Spark ETL
   Long:  2.1b Spark Model Training pipeline
   Thanh: 0.4 SimService → 0.4b Schemas → 0.5 Replay cache
   Duy:   2.6 Streamlit live race panels (build readers, test with mock/empty data)
   Kien:  Slides (ML section)
 
-Apr 24–26 (3 days):
+Apr 23 (1 day):
   Hieu:  Finish 2.1a Spark ETL → verify PG data
   Long:  Finish 2.1b → verify models in GCS
-  Thanh: 2.3 Streaming fast path → 2.5 Deploy SimService on VM
+  Thanh: 2.3 Streaming fast path → 2.4 Streaming slow path → 2.5 Deploy SimService on VM
   Duy:   2.8 Health panel → test live panels against InfluxDB (once Thanh's fast path writes data)
   Kien:  Slides (help others)
 
-Apr 27–28 (2 days):
-  Thanh: 2.4 Streaming slow path (models now in GCS from Long)
+Apr 24 (1 day):
   Duy:   2.9 Deploy updated Streamlit on VM
-  ALL:   Integration testing (3.0–3.8)
+  ALL:   Integration testing (3.0–3.8) + dress rehearsal + slide finalization
 
-Apr 29:
-  ALL:   3.9 Full dress rehearsal + slide finalization
-
-Demo Day:
+Apr 25 — Demo Day:
   Duy:   Start VM + Cloud SQL, submit Dataproc streaming jobs
   Long:  Lead presentation (opens, closes, runs live demo)
   ALL:   Each presents their section
   Duy:   terraform destroy
+```
+
+---
+
+## Demo Day Runbook
+
+> Step-by-step checklist for running the live demo. **Duy** drives infra; **Long** leads the presentation.
+> Arrive **30 min early** to warm everything up.
+
+### T-30 min: Warm-up (Duy)
+
+```bash
+# 1. Start Cloud SQL + VM (if stopped overnight)
+./scripts/infra.sh start
+./scripts/infra.sh status          # note the VM external IP
+
+# 2. SSH into VM and verify services are running
+gcloud compute ssh f1-chubby-vm --zone asia-southeast1-b \
+  --command "docker ps"
+# Expected: streamlit, model-api, influxdb all running
+
+# 3. Open the dashboard and confirm it loads
+#    https://f1.thedblaster.id.vn
+#    Check: historical views load, pre-race predictions work
+```
+
+### T-20 min: Start Dataproc + Streaming (Duy)
+
+```
+Go to GitHub → Actions → "Deploy Dataproc Jobs" → Run workflow → select "all"
+```
+
+This will:
+- Create the Dataproc cluster (takes ~2–3 min)
+- Upload all Spark jobs to GCS
+- Submit ETL job (batch — finishes in a few min)
+- Submit streaming-fast (async — keeps running)
+- Submit streaming-slow (async — keeps running)
+
+**Verify:**
+- [ ] GitHub Actions job goes green
+- [ ] Check [Dataproc console](https://console.cloud.google.com/dataproc/jobs?project=gen-lang-client-0314607994) — 2 streaming jobs in `RUNNING` state
+
+### T-10 min: Start Simulation (Thanh)
+
+```bash
+# SSH into VM and start the simulation service
+gcloud compute ssh f1-chubby-vm --zone asia-southeast1-b
+
+# On the VM:
+cd ~/app
+python3 simulation_service.py --speed 5.0 &
+# This replays a cached race into Pub/Sub at 5× speed (~18 min)
+```
+
+**Verify:**
+- [ ] Messages flowing in Pub/Sub (check [Pub/Sub console](https://console.cloud.google.com/cloudpubsub/topic/list?project=gen-lang-client-0314607994) — message rate > 0)
+- [ ] InfluxDB receiving data — check dashboard live panels show data within ~10 sec
+
+### T-5 min: Final Check (Duy + Thanh)
+
+- [ ] Dashboard `https://f1.thedblaster.id.vn` loads
+- [ ] Historical tab shows data from PostgreSQL
+- [ ] Live Race Tracker shows moving car positions
+- [ ] Live Timing Board shows driver gaps and tyre info
+- [ ] Race Control Feed shows flag events
+- [ ] Pre-race predictions panel works
+- [ ] Health panel shows green status
+
+### Presentation Flow
+
+| Order | Who | Section | Duration |
+|-------|-----|---------|----------|
+| 1 | **Long** | Opening — project intro, architecture overview | 3 min |
+| 2 | **Hieu** | Data pipeline — DataCrawler, GCS, Spark ETL | 3 min |
+| 3 | **Kien** | ML models — features, training, accuracy metrics | 4 min |
+| 4 | **Thanh** | Streaming — SimService, fast/slow paths, Pub/Sub | 4 min |
+| 5 | **Duy** | Live Demo — walk through dashboard, show live panels | 5 min |
+| 6 | **Long** | **Key Demo Moment** + closing | 3 min |
+
+### Key Demo Moment (Long drives, Duy assists)
+
+> This is the highlight — shows the decoupled architecture works.
+
+1. **Long narrates:** "Now we'll show what happens when the ML prediction pipeline fails."
+2. **Duy** opens the [Dataproc console](https://console.cloud.google.com/dataproc/jobs?project=gen-lang-client-0314607994)
+3. **Duy** cancels the **streaming-slow** job (click the job → Cancel)
+4. **Long narrates:** "The slow path is down — no more predictions flowing."
+5. **Everyone watches the dashboard:**
+   - Predictions panel stops updating (shows stale data or "no recent predictions")
+   - **Live positions, timing, and race control continue uninterrupted**
+6. **Long narrates:** "The fast path is completely independent. Live visualization is unaffected."
+
+### After Demo: Tear Down (Duy)
+
+```bash
+# 1. Cancel any remaining Dataproc streaming jobs
+#    (or just delete the cluster — kills all jobs)
+gcloud dataproc clusters delete f1-chubby-spark \
+  --region asia-southeast1 --project gen-lang-client-0314607994 --quiet
+
+# 2. Stop VM + Cloud SQL to save cost
+./scripts/infra.sh stop
+
+# 3. (Optional) Full teardown — destroy ALL infrastructure
+#    Only do this when the project is completely done:
+#    cd infra && terraform destroy
 ```
 
 ---
@@ -351,3 +454,332 @@ Demo Day:
 | **Total** | | | **~44.5 hrs** |
 
 > **Thanh has the heaviest remaining load** (simulation + both streaming paths). Kien and Long are flex capacity to help Thanh if needed.
+
+---
+
+## Local Development & Deployment Guide
+
+### Prerequisites (Everyone)
+
+```bash
+# 1. Clone the repo
+git clone git@github.com:nmk-k66-uet/F1-Chubby-Data.git && cd F1-Chubby-Data
+
+# 2. Install Docker & Docker Compose (v2)
+docker compose version   # must be >= 2.20
+
+# 3. Install gcloud CLI (for GCP deployment)
+# https://cloud.google.com/sdk/docs/install
+
+# 4. Authenticate to GCP (for cloud operations)
+gcloud auth login
+gcloud config set project gen-lang-client-0314607994
+
+# 5. Copy local env file
+cp .env.dev.example .env
+```
+
+### GCP Resource Reference
+
+| Resource | Value |
+|----------|-------|
+| **Project ID** | `gen-lang-client-0314607994` |
+| **Region / Zone** | `asia-southeast1` / `asia-southeast1-b` |
+| **VM** | `f1-chubby-vm` (e2-medium, static IP) |
+| **Cloud SQL** | `f1-chubby-postgres` (db-f1-micro, db=`f1chubby`, user=`f1admin`) |
+| **GCS Raw Data** | `gs://f1chubby-raw-gen-lang-client-0314607994/` |
+| **GCS Models** | `gs://f1chubby-models-gen-lang-client-0314607994/` |
+| **GCS Replay** | `gs://f1chubby-replay-gen-lang-client-0314607994/` |
+| **GCS Dataproc Staging** | `gs://f1chubby-dataproc-staging-gen-lang-client-0314607994/` |
+| **Pub/Sub Topics** | `f1-telemetry`, `f1-timing`, `f1-race-control` |
+| **Pub/Sub Subscriptions** | `*-viz-fast`, `*-pred-slow` (6 total) |
+| **Dataproc Cluster** | `f1-chubby-spark` (single-node n1-standard-4, auto-delete 10 min idle, **created on-demand by CI**) |
+| **InfluxDB** | On VM port 8086 (org=`f1chubby`, bucket=`live_race`) |
+| **Domain** | `https://f1.thedblaster.id.vn` (Cloudflare → VM:80) |
+
+### Start/Stop Cloud Resources (save cost)
+
+```bash
+./scripts/infra.sh start    # Start Cloud SQL + VM
+./scripts/infra.sh stop     # Stop both (saves ~$9/day)
+./scripts/infra.sh status   # Check state + IPs
+```
+
+---
+
+### Hieu — DataCrawler + Spark ETL
+
+#### Local Dev
+
+```bash
+# 1. Start the local dev stack (includes PG + InfluxDB + Model API)
+docker compose -f docker-compose.dev.yml up -d postgres
+
+# 2. Work on DataCrawler GCS upload (core/data_crawler.py)
+#    Test GCS upload locally — needs GCP auth:
+gcloud auth application-default login
+python core/data_crawler.py --years 2024 --upload-to-gcs
+
+# 3. Verify data landed in GCS:
+gsutil ls gs://f1chubby-raw-gen-lang-client-0314607994/2024/
+
+# 4. Work on Spark ETL (spark/etl_pipeline.py)
+#    Test locally with pyspark (install: pip install pyspark)
+#    Use local PG from docker-compose.dev.yml:
+pip install pyspark
+python spark/etl_pipeline.py --local \
+  --gcs-path gs://f1chubby-raw-gen-lang-client-0314607994/ \
+  --pg-host localhost --pg-port 5432 --pg-user f1admin --pg-password localdev123
+
+# 5. Verify PG data:
+docker compose -f docker-compose.dev.yml exec postgres \
+  psql -U f1admin -d f1chubby -c "SELECT COUNT(*) FROM session_results;"
+```
+
+#### Deploy to Dataproc
+
+> **Do NOT run `gcloud dataproc` commands manually.** The cluster is managed by Terraform and jobs are submitted via CI.
+
+1. Push your `spark/etl_pipeline.py` to the `main` branch (or your feature branch and merge)
+2. Go to **Actions → Deploy Dataproc Jobs → Run workflow**
+3. Select **`etl`** from the dropdown and click **Run workflow**
+4. The CI will ensure the cluster exists, upload your Spark file, and submit the job
+5. Monitor the job in the GitHub Actions log or in the [Dataproc console](https://console.cloud.google.com/dataproc/jobs?project=gen-lang-client-0314607994)
+
+---
+
+### Long — Spark Model Training
+
+#### Local Dev
+
+```bash
+# 1. Work on spark/training_pipeline.py
+#    Reference existing training logic in core/ml_core.py
+#    Test locally with pyspark:
+pip install pyspark scikit-learn joblib
+
+# 2. Test with local data (reads from GCS, writes .pkl locally):
+python spark/training_pipeline.py --local \
+  --gcs-path gs://f1chubby-raw-gen-lang-client-0314607994/ \
+  --output-dir ./assets/Models/
+
+# 3. Verify models were created:
+ls -la assets/Models/*.pkl
+
+# 4. Test model loading (sanity check):
+python -c "
+import joblib
+model = joblib.load('assets/Models/podium_model.pkl')
+print('Model loaded, features:', model.n_features_in_)
+"
+
+# 5. Upload models to GCS manually (for testing):
+gsutil cp assets/Models/*.pkl \
+  gs://f1chubby-models-gen-lang-client-0314607994/
+```
+
+#### Deploy to Dataproc
+
+> **Do NOT run `gcloud dataproc` commands manually.** The cluster is managed by Terraform and jobs are submitted via CI.
+
+1. Push your `spark/training_pipeline.py` to the `main` branch (or your feature branch and merge)
+2. Go to **Actions → Deploy Dataproc Jobs → Run workflow**
+3. Select **`training`** from the dropdown and click **Run workflow**
+4. The CI will ensure the cluster exists, upload your Spark file, and submit the job
+5. Monitor the job in the GitHub Actions log or in the [Dataproc console](https://console.cloud.google.com/dataproc/jobs?project=gen-lang-client-0314607994)
+
+---
+
+### Thanh — Simulation + Streaming
+
+#### Local Dev — Simulation Service
+
+```bash
+# 1. Install deps
+pip install google-cloud-pubsub fastf1
+
+# 2. For local testing without real Pub/Sub, use the emulator:
+gcloud components install pubsub-emulator
+gcloud beta emulators pubsub-emulator start --project=gen-lang-client-0314607994 &
+$(gcloud beta emulators pubsub-emulator env-init)
+
+# 3. Run simulation service locally:
+python simulation_service.py --replay-race 2024_bahrain_R --speed 10.0
+
+# 4. Or test against real Pub/Sub (needs GCP auth):
+gcloud auth application-default login
+python simulation_service.py --replay-race 2024_bahrain_R --speed 10.0
+```
+
+#### Local Dev — Pre-Cache Replays
+
+```bash
+# Extract race replay to parquet (runs FastF1, writes to replay_cache/)
+python scripts/precache_replay.py --race 2024_bahrain_R --output replay_cache/
+gsutil -m cp -r replay_cache/ gs://f1chubby-replay-gen-lang-client-0314607994/
+```
+
+#### Local Dev — Spark Streaming
+
+```bash
+# 1. Start InfluxDB locally
+docker compose -f docker-compose.dev.yml up -d influxdb
+
+# 2. Test streaming fast path locally with pyspark:
+pip install pyspark influxdb-client google-cloud-pubsub
+python spark/streaming_fast.py --local \
+  --influxdb-url http://localhost:8086 \
+  --influxdb-token f1chubby-influx-token
+
+# 3. In another terminal, run simulation to produce test messages:
+python simulation_service.py --replay-race 2024_bahrain_R --speed 50.0
+
+# 4. Verify data in InfluxDB:
+curl -s 'http://localhost:8086/api/v2/query?org=f1chubby' \
+  -H 'Authorization: Token f1chubby-influx-token' \
+  -H 'Content-Type: application/vnd.flux' \
+  -d 'from(bucket:"live_race") |> range(start: -1h) |> limit(n:5)'
+```
+
+#### Deploy — Simulation on VM
+
+```bash
+# SCP the simulation service to the VM
+gcloud compute scp simulation_service.py replay_cache/ \
+  f1-chubby-vm:~/app/ --zone asia-southeast1-b --recurse
+
+# SSH and run (or add to docker-compose.yml on VM)
+gcloud compute ssh f1-chubby-vm --zone asia-southeast1-b \
+  --command "cd ~/app && python3 simulation_service.py --speed 5.0 &"
+```
+
+#### Deploy — Streaming to Dataproc
+
+> **Do NOT run `gcloud dataproc` commands manually.** The cluster is managed by Terraform and jobs are submitted via CI.
+
+1. Push your `spark/streaming_fast.py` and/or `spark/streaming_slow.py` to `main`
+2. Go to **Actions → Deploy Dataproc Jobs → Run workflow**
+3. Select **`streaming-fast`**, **`streaming-slow`**, or **`all`** from the dropdown
+4. The CI will ensure the cluster exists, upload your Spark files, and submit the job(s)
+5. Streaming jobs run with `--async` — they keep running on Dataproc until cancelled
+6. Monitor in GitHub Actions or the [Dataproc console](https://console.cloud.google.com/dataproc/jobs?project=gen-lang-client-0314607994)
+
+---
+
+### Duy — Streamlit Live Race Panels
+
+#### Local Dev
+
+```bash
+# 1. Start the full local dev stack
+docker compose -f docker-compose.dev.yml up --build
+
+# 2. Open http://localhost:8501 — Streamlit with hot reload
+#    Edit files in components/ and pages/ — changes reflect immediately
+
+# 3. InfluxDB will be empty initially. To test live panels with mock data,
+#    write test points directly:
+python -c "
+from influxdb_client import InfluxDBClient, Point
+from influxdb_client.client.write_api import SYNCHRONOUS
+client = InfluxDBClient(url='http://localhost:8086', token='f1chubby-influx-token', org='f1chubby')
+write = client.write_api(write_options=SYNCHRONOUS)
+# Write a test live_positions point
+write.write('live_race', record=Point('live_positions')
+    .tag('driver_id', 'VER')
+    .field('x', 1234.5).field('y', 5678.9)
+    .field('speed_kph', 312.4).field('gear', 8).field('drs', 1)
+    .field('lap_number', 15))
+# Write a test live_timing point
+write.write('live_race', record=Point('live_timing')
+    .tag('driver_id', 'VER')
+    .field('position', 1).field('lap_time_ms', 88234)
+    .field('gap_to_leader_ms', 0).field('tyre_compound', 'MEDIUM')
+    .field('tyre_age_laps', 8))
+# Write a test live_race_control point
+write.write('live_race', record=Point('live_race_control')
+    .tag('scope', 'SECTOR_2')
+    .field('flag', 'YELLOW').field('message', 'Yellow flag in sector 2')
+    .field('driver_id', 'HAM').field('lap_number', 16))
+print('Test data written to InfluxDB')
+"
+
+# 4. Existing predictions reader template is at:
+#    components/tab_live_race.py line 57 (_fetch_predictions_from_influxdb)
+
+# 5. Check InfluxDB UI at http://localhost:8086 (admin / f1chubby2026)
+```
+
+#### Deploy
+
+Streamlit deploys automatically on push to `main` via the **Deploy to VM** workflow.
+Files that trigger it: `main.py`, `core/**`, `components/**`, `pages/**`, `assets/**`, `.streamlit/**`.
+
+Manual deploy:
+```bash
+gcloud compute scp --recurse \
+  main.py Dockerfile docker-compose.yml requirements-streamlit.txt \
+  .streamlit core components pages model_serving \
+  f1-chubby-vm:~/app/ --zone asia-southeast1-b --quiet
+
+gcloud compute ssh f1-chubby-vm --zone asia-southeast1-b \
+  --command "cd ~/app && docker compose up -d --build --remove-orphans"
+```
+
+---
+
+### Kien — Slides
+
+No local dev or deployment needed. Use Google Slides.
+
+Reference materials for slide content:
+- Architecture diagrams: `revised_plan.md` (Mermaid → export via [mermaid.live](https://mermaid.live))
+- Model details: `core/ml_core.py` (training logic, features, metrics)
+- Model API contract: `model_serving/app.py` (endpoints, request/response schemas)
+- Model metrics: `f1_cache/model_metrics.txt`, `f1_cache/in_race_metrics.txt`
+
+---
+
+### Common Workflows
+
+#### Full local stack (for integration testing)
+
+```bash
+docker compose -f docker-compose.dev.yml up --build
+# postgres (5432) + influxdb (8086) + model-api (8080) + etl (one-shot) + streamlit (8501)
+```
+
+#### Reset local data
+
+```bash
+docker compose -f docker-compose.dev.yml down -v   # removes volumes (PG data, InfluxDB data)
+docker compose -f docker-compose.dev.yml up --build # re-seeds from scratch
+```
+
+#### View logs
+
+```bash
+docker compose -f docker-compose.dev.yml logs -f streamlit   # follow streamlit logs
+docker compose -f docker-compose.dev.yml logs -f model-api   # follow model-api logs
+docker compose -f docker-compose.dev.yml logs etl            # check ETL seed status
+```
+
+#### Connect to Cloud SQL directly
+
+```bash
+# Get Cloud SQL IP
+./scripts/infra.sh status
+
+# Connect via psql
+psql -h <CLOUD_SQL_IP> -U f1admin -d f1chubby
+# Password: ask Duy or check Terraform Cloud variables
+```
+
+#### SSH to VM
+
+```bash
+gcloud compute ssh f1-chubby-vm --zone asia-southeast1-b
+# App is at ~/app/, docker compose running there
+docker ps                           # see running containers
+docker compose logs -f streamlit    # follow logs
+```
