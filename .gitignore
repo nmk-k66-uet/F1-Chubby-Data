@@ -240,3 +240,5 @@ terraform.rc
 .terraform.lock.hcl
 .direnv
 
+
+gcs-key/key-gcs.json

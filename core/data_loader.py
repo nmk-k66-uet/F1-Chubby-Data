@@ -12,11 +12,15 @@ import streamlit as st
 import fastf1
 import pandas as pd
 import os
+import shutil
+
 from core import db
 
+from google.cloud import storage
 # ==========================================
 # CACHE CONFIGURATION
 # ==========================================
+BUCKET = "f1chubby-raw"
 CACHE_DIR = 'f1_cache'
 if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR)
@@ -24,6 +28,55 @@ if not os.path.exists(CACHE_DIR):
 # Enable FastF1 caching and suppress verbose logging
 fastf1.Cache.enable_cache(CACHE_DIR)
 fastf1.set_log_level('ERROR')
+
+STORAGE_CLASSES = ('STANDARD', 'NEARLINE', 'COLDLINE', 'ARCHIVE')
+
+class GCStorage:
+    def __init__(self, key_path):
+        self.client = storage.Client.from_service_account_json(key_path)
+
+    def create_bucket(self, bucket_name, storage_class, bucket_location='US'):
+        bucket = self.client.bucket(bucket_name)
+        bucket.storage_class = storage_class
+        self.client.create_bucket(bucket, bucket_location)        
+
+    def get_bucket(self, bucket_name):
+        return self.client.get_bucket(bucket_name)
+
+    def list_buckets(self):
+        buckets = self.client.list_buckets()
+        return [bucket.name for bucket in buckets]
+
+    def upload_file(self, bucket_name, blob_destination, file_path):
+        print(f"Upload {file_path} to GCS!")
+        content_type = "application/octet-stream"
+        bucket = self.get_bucket(bucket_name)
+        blob = bucket.blob(blob_destination)
+        blob.upload_from_filename(file_path, content_type=content_type)
+        return blob
+
+    def list_blobs(self, bucket_name):
+        return self.client.list_blobs(bucket_name)
+    
+    def check_blob_exists(self, bucket_name, blob_name):
+        bucket = self.get_bucket(bucket_name)
+        blob = bucket.blob(blob_name)
+        return blob.exists()
+
+    def download_blob(self, bucket_name, source_blob_name):
+        """Downloads a blob from the bucket."""
+        blobs = self.list_blobs(bucket_name)
+        blob_path = os.path.join(CACHE_DIR, source_blob_name)
+        os.makedirs(blob_path, exist_ok=True)
+
+        for blob in blobs:
+            if source_blob_name in blob.name:
+                print(f"Download {blob.name} from GCS!")
+                blob.download_to_filename(os.path.join(CACHE_DIR, blob.name))
+
+
+key_path = "gcs-key/key-gcs.json"
+gcs = GCStorage(key_path=key_path)
 
 # ==========================================
 # DATA LOADING FUNCTIONS
@@ -51,6 +104,52 @@ def get_schedule(year):
     except:
         return pd.DataFrame()
 
+def get_blob(year, round_num, session_type):
+    schedule = get_schedule(year)
+    schedule = schedule[schedule["RoundNumber"] == round_num]
+    
+    if session_type == "FP1":
+        sub_event = str(list(schedule["Session1Date"])[0]).split(" ")[0] + "_" + list(schedule["Session1"])[0].replace(" ", "_")
+
+    if session_type == "FP2":
+        sub_event = str(list(schedule["Session2Date"])[0]).split(" ")[0] + "_" + list(schedule["Session2"])[0].replace(" ", "_")
+
+    if session_type == "FP3":
+        sub_event = str(list(schedule["Session3Date"])[0]).split(" ")[0] + "_" + list(schedule["Session3"])[0].replace(" ", "_")
+
+    if session_type == "Q":
+        sub_event = str(list(schedule["Session4Date"])[0]).split(" ")[0] + "_" + list(schedule["Session4"])[0].replace(" ", "_")
+    
+    if session_type == "R":
+        sub_event = str(list(schedule["Session5Date"])[0]).split(" ")[0] + "_" + list(schedule["Session5"])[0].replace(" ", "_")
+
+    blob = f"{year}/{str(list(schedule["EventDate"])[0]).split(" ")[0]}_{str(list(schedule["EventName"])[0]).replace(" ", "_")}/{sub_event}"
+    return blob
+
+def load(year, round_num, session_type, telemetry, weather, messages):
+    blob = get_blob(year, round_num, session_type)
+    is_exist = False
+    for sub_blob in gcs.list_blobs(BUCKET):
+        if blob in sub_blob.name:
+            is_exist = True
+            break
+    if is_exist:
+        gcs.download_blob(BUCKET, blob)
+
+    session = fastf1.get_session(year, round_num, session_type)
+    session.load(telemetry=telemetry, weather=weather, messages=messages)
+
+    if not is_exist:
+        for file in os.listdir(os.path.join(CACHE_DIR, blob)):
+            gcs.upload_file(
+                BUCKET, 
+                blob.replace("\\", "/") + "/" + file, 
+                os.path.join(CACHE_DIR, blob, file))
+
+    shutil.rmtree(os.path.join(CACHE_DIR, str(year)))
+
+    return session
+
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_race_winner(year, round_num):
     """Winner string from PostgreSQL, fallback to FastF1."""
@@ -65,8 +164,15 @@ def get_race_winner(year, round_num):
 
     # Fallback: FastF1
     try:
-        session = fastf1.get_session(year, round_num, 'R')
-        session.load(telemetry=False, weather=False, messages=False)
+        session = load(
+            year=year,
+            round_num=round_num,
+            session_type="R",
+            telemetry=False,
+            weather=False,
+            messages=False
+        )
+        
         winner = session.results.iloc[0]
         return f"{winner['FullName']} ({winner['TeamName']})"
     except:
@@ -79,9 +185,13 @@ def load_f1_session(year, round_num, session_type):
     Always uses FastF1 — telemetry cannot come from PostgreSQL.
     """
     try:
-        session = fastf1.get_session(year, round_num, session_type)
-        session.load(telemetry=True, weather=False)
-        return session
+        return load(
+            year=year,
+            round_num=round_num,
+            session_type=session_type,
+            telemetry=True,
+            weather=False,
+            messages=True)
     except Exception as e:
         st.error(f"Error loading session data: {e}")
         return None
@@ -141,8 +251,15 @@ def get_event_highlights(year, round_num):
 
     # Fallback: FastF1
     try:
-        race = fastf1.get_session(year, round_num, 'R')
-        race.load(telemetry=False, weather=False, messages=False)
+        race = load(
+            year=year,
+            round_num=round_num,
+            session_type="R",
+            telemetry=False, 
+            weather=False, 
+            messages=False
+        )
+
         
         if not race.results.empty:
             highlights["winner"] = race.results.iloc[0]['FullName']
@@ -161,10 +278,20 @@ def get_event_highlights(year, round_num):
                 highlights["fastest_lap_driver"] = driver_full_name 
                 highlights["fastest_lap_time"] = f"{m:02d}:{s:06.3f}"
 
-        qualy = fastf1.get_session(year, round_num, 'Q')
-        qualy.load(telemetry=False, weather=False, messages=False)
+        qualy = load(
+            year=year,
+            round_num=round_num,
+            session_type="Q",
+            telemetry=False, 
+            weather=False, 
+            messages=False
+        )
+
         if not qualy.results.empty:
+            # Pole position is the driver with fastest qualifying time
             highlights["pole"] = qualy.results.iloc[0]['FullName']
+            
+
             
     except Exception:
         pass 
