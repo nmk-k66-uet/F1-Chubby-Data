@@ -21,7 +21,6 @@ permissions:
 env:
   PROJECT_ID: gen-lang-client-0314607994
   REGION: asia-southeast1
-  ZONE: asia-southeast1-b
   CLUSTER_NAME: f1-chubby-spark
   STAGING_BUCKET: f1chubby-dataproc-staging-gen-lang-client-0314607994
 
@@ -45,18 +44,24 @@ jobs:
         run: |
           gsutil cp spark/*.py gs://${{ env.STAGING_BUCKET }}/spark/
 
+      - name: Delete stale cluster if exists
+        run: |
+          gcloud dataproc clusters delete ${{ env.CLUSTER_NAME }} \
+            --region ${{ env.REGION }} \
+            --project ${{ env.PROJECT_ID }} \
+            --quiet || true
+
       - name: Create Dataproc cluster
         run: |
           gcloud dataproc clusters create ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }} \
-            --zone ${{ env.ZONE }} \
             --single-node \
             --master-machine-type n1-standard-4 \
             --master-boot-disk-size 50GB \
             --image-version 2.1-debian11 \
             --max-idle 600s \
             --project ${{ env.PROJECT_ID }} \
-            --bucket ${{ env.STAGING_BUCKET }} || true
+            --bucket ${{ env.STAGING_BUCKET }}
 
       - name: Submit ETL Job
         if: inputs.job_type == 'etl' || inputs.job_type == 'all'
