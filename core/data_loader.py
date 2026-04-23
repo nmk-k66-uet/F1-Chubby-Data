@@ -20,7 +20,7 @@ from google.cloud import storage
 # ==========================================
 # CACHE CONFIGURATION
 # ==========================================
-BUCKET = "f1chubby-raw"
+BUCKET = "f1chubby-raw-gen-lang-client-0314607994"
 CACHE_DIR = 'f1_cache'
 if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR)
@@ -32,8 +32,11 @@ fastf1.set_log_level('ERROR')
 STORAGE_CLASSES = ('STANDARD', 'NEARLINE', 'COLDLINE', 'ARCHIVE')
 
 class GCStorage:
-    def __init__(self, key_path):
-        self.client = storage.Client.from_service_account_json(key_path)
+    def __init__(self, key_path=None):
+        if key_path and os.path.exists(key_path):
+            self.client = storage.Client.from_service_account_json(key_path)
+        else:
+            self.client = storage.Client()
 
     def create_bucket(self, bucket_name, storage_class, bucket_location='US'):
         bucket = self.client.bucket(bucket_name)
@@ -75,7 +78,7 @@ class GCStorage:
                 blob.download_to_filename(os.path.join(CACHE_DIR, blob.name))
 
 
-key_path = "gcs-key/key-gcs.json"
+key_path = "gcs-key/gen-lang-client-0314607994-ff9d436a97ef.json"
 gcs = GCStorage(key_path=key_path)
 
 # ==========================================
@@ -123,7 +126,7 @@ def get_blob(year, round_num, session_type):
     if session_type == "R":
         sub_event = str(list(schedule["Session5Date"])[0]).split(" ")[0] + "_" + list(schedule["Session5"])[0].replace(" ", "_")
 
-    blob = f"{year}/{str(list(schedule["EventDate"])[0]).split(" ")[0]}_{str(list(schedule["EventName"])[0]).replace(" ", "_")}/{sub_event}"
+    blob = f"{year}/{str(list(schedule['EventDate'])[0]).split(' ')[0]}_{str(list(schedule['EventName'])[0]).replace(' ', '_')}/{sub_event}"
     return blob
 
 def load(year, round_num, session_type, telemetry, weather, messages):

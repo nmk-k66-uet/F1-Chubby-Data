@@ -41,9 +41,11 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Upload Spark jobs to GCS
+      - name: Upload Spark jobs and dependencies to GCS
         run: |
           gsutil cp spark/*.py gs://${{ env.STAGING_BUCKET }}/spark/
+          zip -r core_dependencies.zip core/
+          gsutil cp core_dependencies.zip gs://${{ env.STAGING_BUCKET }}/spark/
 
       - name: Create Dataproc cluster
         run: |
@@ -66,7 +68,8 @@ jobs:
             --cluster ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
-            --jars gs://spark-lib/postgres/postgresql-42.7.3.jar
+            --jars gs://spark-lib/postgres/postgresql-42.7.3.jar \
+            --py-files gs://${{ env.STAGING_BUCKET }}/spark/core_dependencies.zip
 
       - name: Submit Model Training Job
         if: inputs.job_type == 'training' || inputs.job_type == 'all'
@@ -75,7 +78,8 @@ jobs:
             gs://${{ env.STAGING_BUCKET }}/spark/training_pipeline.py \
             --cluster ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }} \
-            --project ${{ env.PROJECT_ID }}
+            --project ${{ env.PROJECT_ID }} \
+            --py-files gs://${{ env.STAGING_BUCKET }}/spark/core_dependencies.zip
 
       - name: Submit Streaming Fast Path
         if: inputs.job_type == 'streaming-fast' || inputs.job_type == 'all'
@@ -85,6 +89,7 @@ jobs:
             --cluster ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
+            --py-files gs://${{ env.STAGING_BUCKET }}/spark/core_dependencies.zip \
             --async
 
       - name: Submit Streaming Slow Path
@@ -95,4 +100,5 @@ jobs:
             --cluster ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
+            --py-files gs://${{ env.STAGING_BUCKET }}/spark/core_dependencies.zip \
             --async
