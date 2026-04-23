@@ -47,15 +47,14 @@ resource "google_compute_instance" "f1_vm" {
       - systemctl enable docker
       - systemctl start docker
       - |
-        # Write .env for docker compose in all OS Login user home dirs
-        for d in /home/*/; do
-          cat > "$${d}.env" <<DOTENV
+        # Write .env to a fixed global path so any OS Login user (incl. GitHub Actions SA) can find it
+        mkdir -p /opt/f1chubby
+        cat > /opt/f1chubby/.env <<DOTENV
         GEMINI_API_KEY=${var.gemini_api_key}
         GCS_CACHE_BUCKET=${var.gcs_cache_bucket}
         GCS_MODELS_BUCKET=${var.gcs_models_bucket}
         DOTENV
-          chown $(stat -c '%U:%G' "$$d") "$${d}.env"
-        done
+        chmod 644 /opt/f1chubby/.env
       - echo "F1 Chubby VM ready. Docker installed via get-docker.sh."
     EOF
   }
