@@ -13,7 +13,7 @@ import streamlit as st
 import pandas as pd
 import base64
 import os
-from core import db
+
 
 TEAM_COLORS = {
     "red bull": "#3671C6", "mercedes": "#00D2BE", "ferrari": "#DC0000",
@@ -77,44 +77,11 @@ def get_team_color(team_name):
         if key in team_lower: return color
     return "#555555"
 
-@st.cache_data(show_spinner=False, ttl=3600)
+@st.cache_data(show_spinner=False, ttl=86400)
 def fetch_constructors_data(year):
-    """Fetch constructor standings from PostgreSQL, fallback to Ergast API."""
+    """Fetch constructor standings from Ergast API."""
     teams_data = []
 
-    # --- Try PostgreSQL first ---
-    max_round_rows = db.query(
-        "SELECT MAX(round) as max_round FROM constructor_standings WHERE year=%s", (year,)
-    )
-    max_round = max_round_rows[0]["max_round"] if max_round_rows and max_round_rows[0]["max_round"] else None
-
-    if max_round is not None:
-        c_rows = db.query(
-            "SELECT cs.constructor_name, cs.position, cs.points, cs.wins, "
-            "COALESCE(pod.podiums, 0) as podiums "
-            "FROM constructor_standings cs "
-            "LEFT JOIN ("
-            "  SELECT team_name, COUNT(*) as podiums "
-            "  FROM session_results "
-            "  WHERE year=%s AND session_type='R' AND position <= 3 "
-            "  GROUP BY team_name"
-            ") pod ON cs.constructor_name = pod.team_name "
-            "WHERE cs.year=%s AND cs.round=%s "
-            "ORDER BY cs.position",
-            (year, year, max_round),
-        )
-        if c_rows:
-            for c in c_rows:
-                teams_data.append({
-                    "pos": str(c["position"]),
-                    "points": str(int(c["points"])) if c["points"] == int(c["points"]) else str(c["points"]),
-                    "wins": str(c["wins"]),
-                    "podiums": str(c["podiums"]),
-                    "name": c["constructor_name"],
-                })
-            return teams_data
-
-    # --- Fallback: Ergast API ---
     import requests as _requests
     try:
         podium_counts = {}

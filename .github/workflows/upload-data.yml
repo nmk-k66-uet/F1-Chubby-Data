@@ -9,7 +9,6 @@ on:
         type: choice
         options:
           - raw-data
-          - replay-cache
           - models
           - all
 
@@ -45,15 +44,6 @@ jobs:
             gsutil -m cp -r f1_cache/* gs://f1chubby-raw-${{ env.PROJECT_ID }}/
           else
             echo "No f1_cache directory found, skipping raw data upload"
-          fi
-
-      - name: Upload replay cache
-        if: inputs.target == 'replay-cache' || inputs.target == 'all'
-        run: |
-          if [ -d "replay_cache" ]; then
-            gsutil -m cp -r replay_cache/* gs://f1chubby-replay-${{ env.PROJECT_ID }}/
-          else
-            echo "No replay_cache directory found, skipping"
           fi
 
       - name: Upload model artifacts

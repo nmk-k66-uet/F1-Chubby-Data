@@ -49,7 +49,7 @@ jobs:
           # Copy core app files
           gcloud compute scp --recurse \
             main.py Dockerfile docker-compose.yml requirements-streamlit.txt \
-            .streamlit core components pages model_serving sql \
+            .streamlit core components pages assets model_serving sql \
             ${{ env.VM_NAME }}:~/app/ \
             --zone ${{ env.ZONE }} \
             --quiet

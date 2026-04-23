@@ -44,12 +44,8 @@ services:
       INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-f1chubby-influx-token}
       INFLUXDB_ORG: f1chubby
       INFLUXDB_BUCKET: live_race
-      POSTGRES_HOST: ${POSTGRES_HOST:-}
-      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
-      POSTGRES_DB: ${POSTGRES_DB:-f1chubby}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
-      LOCAL_MODE: ${LOCAL_MODE:-false}
+      GCS_CACHE_BUCKET: ${GCS_CACHE_BUCKET:-f1chubby-cache-gen-lang-client-0314607994}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     volumes:
       - ./f1_cache:/app/f1_cache
     depends_on:
