@@ -20,7 +20,7 @@ from google.cloud import storage
 # ==========================================
 # CACHE CONFIGURATION
 # ==========================================
-BUCKET = "f1chubby-raw"
+BUCKET = "f1chubby-cache-gen-lang-client-0314607994"
 CACHE_DIR = 'f1_cache'
 if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR)
@@ -47,9 +47,8 @@ class GCStorage:
         buckets = self.client.list_buckets()
         return [bucket.name for bucket in buckets]
 
-    def upload_file(self, bucket_name, blob_destination, file_path):
-        print(f"Upload {file_path} to GCS!")
-        content_type = "application/octet-stream"
+    def upload_file(self, bucket_name, blob_destination, file_path, content_type = "application/octet-stream"):
+        print(f"Upload {file_path} to {blob_destination} on GCS!")
         bucket = self.get_bucket(bucket_name)
         blob = bucket.blob(blob_destination)
         blob.upload_from_filename(file_path, content_type=content_type)
@@ -73,6 +72,14 @@ class GCStorage:
             if source_blob_name in blob.name:
                 print(f"Download {blob.name} from GCS!")
                 blob.download_to_filename(os.path.join(CACHE_DIR, blob.name))
+
+    def download_one_file(self, bucket_name, blob_file, destination_file):
+        blobs = self.list_blobs(bucket_name)
+
+        for blob in blobs:
+            if blob_file in blob.name:
+                print(f"Download {blob.name} from GCS!")
+                blob.download_to_filename(destination_file)
 
 
 key_path = "gcs-key/key-gcs.json"
