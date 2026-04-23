@@ -14,7 +14,7 @@ import pandas as pd
 import base64
 import os
 import unicodedata
-from core import db
+
 
 # Cấu hình màu sắc đặc trưng của các đội đua
 TEAM_COLORS = {
@@ -69,50 +69,11 @@ def get_team_color(team_name):
         if key in team_lower: return color
     return "#555555"
 
-@st.cache_data(show_spinner=False, ttl=3600)
+@st.cache_data(show_spinner=False, ttl=86400)
 def fetch_all_driver_standings(year):
-    """Fetch all driver standings from PostgreSQL, fallback to Ergast API."""
+    """Fetch all driver standings from Ergast API."""
     drivers_data = []
 
-    # --- Try PostgreSQL first ---
-    max_round_rows = db.query(
-        "SELECT MAX(round) as max_round FROM driver_standings WHERE year=%s", (year,)
-    )
-    max_round = max_round_rows[0]["max_round"] if max_round_rows and max_round_rows[0]["max_round"] else None
-
-    if max_round is not None:
-        d_rows = db.query(
-            "SELECT ds.full_name, ds.team_name, ds.position, ds.points, ds.wins, ds.driver_abbr, "
-            "COALESCE(pod.podiums, 0) as podiums "
-            "FROM driver_standings ds "
-            "LEFT JOIN ("
-            "  SELECT driver_abbr, COUNT(*) as podiums "
-            "  FROM session_results "
-            "  WHERE year=%s AND session_type='R' AND position <= 3 "
-            "  GROUP BY driver_abbr"
-            ") pod ON ds.driver_abbr = pod.driver_abbr "
-            "WHERE ds.year=%s AND ds.round=%s "
-            "ORDER BY ds.position",
-            (year, year, max_round),
-        )
-        if d_rows:
-            for d in d_rows:
-                name_parts = d["full_name"].split(" ", 1)
-                first_name = name_parts[0] if name_parts else ""
-                last_name = name_parts[1] if len(name_parts) > 1 else ""
-                drivers_data.append({
-                    "pos": str(d["position"]),
-                    "points": str(int(d["points"])) if d["points"] == int(d["points"]) else str(d["points"]),
-                    "wins": str(d["wins"]),
-                    "podiums": str(d["podiums"]),
-                    "first_name": first_name,
-                    "last_name": last_name,
-                    "number": "",
-                    "team": d["team_name"],
-                })
-            return drivers_data
-
-    # --- Fallback: Ergast API ---
     import requests as _requests
     try:
         podium_counts = {}

@@ -1,6 +1,6 @@
 # Team Assignment — F1-Chubby-Data
 
-> **5 members · Updated Apr 21, 2026**
+> **5 members · Updated Apr 23, 2026**
 > Focus: remaining pipeline integration work toward Demo Day
 
 ---
@@ -34,21 +34,25 @@ A working end-to-end demo:
 - [x] ETL script (`scripts/load_historical_data.py`): FastF1 → PostgreSQL (4 tables, `--offline`, `--skip-if-seeded`)
 - [x] PostgreSQL schema: 4 tables deployed (race_calendar, session_results, driver_standings, constructor_standings)
 - [x] InfluxDB running on VM (org=f1chubby, bucket=live_race, currently empty)
-- [x] Streamlit live at `https://f1.thedblaster.id.vn` — historical views from PG with FastF1 fallback
+- [x] Streamlit live at `https://f1.thedblaster.id.vn` — historical views from GCS via FastF1 cache, standings from Ergast API
 - [x] Pre-race + in-race predictions route through Model Serving API
 - [x] GitHub Actions workflows (terraform, deploy-vm, deploy-dataproc, upload-data)
 - [x] Streamlit reads `predictions` measurement from InfluxDB (existing reader in `tab_live_race.py`)
+- [x] DataCrawler data extraction → GCS upload (all historical data crawled and in GCS)
+- [x] ETL historical data load (pre-seeded via CSV import into PostgreSQL)
+- [x] Streamlit decoupled from PostgreSQL (reads from GCS + FastF1 cache, ADC auth)
+- [x] GCS bidirectional caching in `core/data_loader.py` — `GCStorage` class downloads from / uploads to `f1chubby-raw` bucket; local cache cleaned after each session load
+- [x] Deploy-VM workflow updated: does **not** copy `f1_cache` to VM (loaded on-demand from GCS); adds `sql/`, `simulation_service.py`, `schemas/**` to deploy paths
+- [x] Deploy-Dataproc workflow: split `batch` into separate `etl` and `training` job types with dedicated pipeline scripts
 
 ### Not Started
 
-- [ ] `spark/etl_pipeline.py` — Spark ETL job (GCS → PG)
+- [ ] `spark/etl_pipeline.py` — Spark ETL job (GCS → PG) — **kept in design for presentation only, data pre-seeded**
 - [ ] `spark/training_pipeline.py` — Spark Model Training job (GCS → features → train → .pkl → GCS)
 - [ ] `spark/streaming_fast.py` — Spark Streaming fast path (Pub/Sub → InfluxDB live measurements)
 - [ ] `spark/streaming_slow.py` — Spark Streaming slow path (Pub/Sub → features → Model API → InfluxDB predictions)
 - [ ] Simulation Service — replay cached race into Pub/Sub
 - [ ] Pub/Sub message schemas (`/schemas/`)
-- [ ] Pre-cached race replays (parquet, 10 Hz interpolated)
-- [ ] DataCrawler GCS upload extension
 - [ ] Streamlit live race panels: live_positions reader, live_timing reader, live_race_control reader
 - [ ] Streamlit pipeline health panel (simplified — Model API health, InfluxDB freshness, Pub/Sub backlog)
 - [ ] Slides
@@ -91,44 +95,20 @@ No blocking dependency:
 
 ---
 
-### Hieu — DataCrawler → GCS + Spark ETL
+### Hieu — Spark ETL (Presentation Only) + Assist Thanh
 
-#### Task 0.3 — Extend DataCrawler with GCS Upload
+#### Task 0.3 — ~~Extend DataCrawler with GCS Upload~~ (Completed)
 
-| Field | Detail |
-|-------|--------|
-| **Est. Effort** | 2 hrs |
-| **Depends On** | — |
-| **Blocks** | 2.1a (Spark ETL reads from GCS) |
+> **Status:** ✅ Completed. All historical data has been crawled and uploaded to GCS. Additionally, `core/data_loader.py` now has a `GCStorage` class and `load()` function that provides bidirectional GCS caching: downloads session cache from `f1chubby-raw` if available, falls back to FastF1, then uploads new cache to GCS. Local `f1_cache/` is cleaned after each session load — the VM no longer needs a pre-populated cache directory.
 
-Extend `core/data_crawler.py` to upload extracted raw data to GCS after local extraction.
-
-- Add `google-cloud-storage` SDK
-- After extraction, upload to `gs://f1chubby-raw/{year}/{round}/{session}/`
-- Preserve existing checkpoint/resume logic
-- Add `--upload-only` flag for re-uploading existing local data
-- Handle GCS upload failures gracefully (retry 3×, log and continue)
-
-#### Task 2.1a — Spark ETL on Dataproc
+#### Task 2.1a — Spark ETL on Dataproc (Presentation Only)
 
 | Field | Detail |
 |-------|--------|
-| **Est. Effort** | 5 hrs |
-| **Depends On** | 0.3 (data in GCS), 1.3 (PG tables exist) |
-| **Blocks** | 3.0 (data quality verify) |
+| **Est. Effort** | 0 hrs (pre-seeded, kept for presentation) |
+| **Status** | Data pre-seeded via CSV import. Pipeline kept in architecture diagrams for demo presentation. |
 
-Write `spark/etl_pipeline.py` — reads raw data from GCS, transforms, writes to PostgreSQL.
-
-- Read from `gs://f1chubby-raw/`
-- Clean, normalize, resolve schema differences across seasons
-- Write to 4 PostgreSQL tables via JDBC: race_calendar, session_results, driver_standings, constructor_standings
-- Idempotent: `mode="overwrite"` for re-runs
-- Deploy via **GitHub Actions** only (`Actions → Deploy Dataproc Jobs → etl`)
-
-**Done when:**
-- [ ] Job completes on Dataproc (exit code 0)
-- [ ] All 4 PG tables populated with data for 2018–2026
-- [ ] `SELECT COUNT(*) FROM session_results` returns >0 for all covered seasons
+> **Note:** Hieu's primary remaining work is to assist Thanh with streaming tasks (0.4, 2.3, 2.4) since Thanh has the heaviest remaining load.
 
 ---
 
@@ -145,6 +125,7 @@ Write `spark/etl_pipeline.py` — reads raw data from GCS, transforms, writes to
 Write `spark/training_pipeline.py` — reads raw data from GCS, engineers features, trains models, uploads artifacts.
 
 - Read from `gs://f1chubby-raw/`
+- PostgreSQL is available for training data storage (Long manages schema/usage freely)
 - Feature Engineering: GridPosition, QualifyingDelta, FP2_PaceDelta, DriverForm, TeamTier (pre-race); lap-by-lap snapshots (in-race)
 - Train pre-race RandomForest classifier → `pre_race_model.pkl`
 - Train in-race RandomForest regressor → `in_race_model.pkl`, `in_race_podium_model.pkl`
@@ -193,7 +174,7 @@ Define JSON Schema (draft-07) for all 3 topics in `schemas/`. Include `schemas/v
 | **Est. Effort** | 1 hr |
 | **Depends On** | 0.4 |
 
-Extract 2–3 races from FastF1, interpolate to 10 Hz, save as parquet. Upload to `gs://f1chubby-replay/`.
+Extract 2–3 races from FastF1, interpolate to 10 Hz, save as parquet. Upload to `gs://f1chubby-raw/replay/`.
 
 #### Task 2.3 — Spark Streaming Fast Path
 
@@ -309,14 +290,14 @@ Also help other team members with slide content for their sections.
 
 ```
 Apr 21–22 (2 days):
-  Hieu:  0.3 DataCrawler GCS upload → start 2.1a Spark ETL
+  Hieu:  Help Thanh with SimService + Schemas
   Long:  2.1b Spark Model Training pipeline
   Thanh: 0.4 SimService → 0.4b Schemas → 0.5 Replay cache
   Duy:   2.6 Streamlit live race panels (build readers, test with mock/empty data)
   Kien:  Slides (ML section)
 
 Apr 23 (1 day):
-  Hieu:  Finish 2.1a Spark ETL → verify PG data
+  Hieu:  Help Thanh with streaming fast/slow paths
   Long:  Finish 2.1b → verify models in GCS
   Thanh: 2.3 Streaming fast path → 2.4 Streaming slow path → 2.5 Deploy SimService on VM
   Duy:   2.8 Health panel → test live panels against InfluxDB (once Thanh's fast path writes data)
@@ -393,7 +374,7 @@ python3 simulation_service.py --speed 5.0 &
 ### T-5 min: Final Check (Duy + Thanh)
 
 - [ ] Dashboard `https://f1.thedblaster.id.vn` loads
-- [ ] Historical tab shows data from PostgreSQL
+- [ ] Historical tab shows data from GCS cache (via FastF1)
 - [ ] Live Race Tracker shows moving car positions
 - [ ] Live Timing Board shows driver gaps and tyre info
 - [ ] Race Control Feed shows flag events
@@ -446,14 +427,14 @@ gcloud dataproc clusters delete f1-chubby-spark \
 
 | Person | Remaining Dev | Slides | Total Remaining |
 |--------|--------------|--------|-----------------|
-| **Hieu** | 7 hrs (0.3 + 2.1a) | — | **7 hrs** |
+| **Hieu** | Flex — assist Thanh | — | **flex** |
 | **Long** | 5 hrs (2.1b) | — | **5 hrs** |
 | **Thanh** | 21.5 hrs (0.4 + 0.4b + 0.5 + 2.3 + 2.4 + 2.5) | 1 hr | **22.5 hrs** |
 | **Duy** | 7 hrs (2.6 + 2.8) | — | **7 hrs** |
 | **Kien** | — | 3 hrs | **3 hrs** |
-| **Total** | | | **~44.5 hrs** |
+| **Total** | | | **~37.5+ hrs** |
 
-> **Thanh has the heaviest remaining load** (simulation + both streaming paths). Kien and Long are flex capacity to help Thanh if needed.
+> **Thanh has the heaviest remaining load** (simulation + both streaming paths). Hieu is now freed up to assist Thanh. Kien and Long are also flex capacity if needed.
 
 ---
 
@@ -471,9 +452,8 @@ docker compose version   # must be >= 2.20
 # 3. Install gcloud CLI (for GCP deployment)
 # https://cloud.google.com/sdk/docs/install
 
-# 4. Authenticate to GCP (for cloud operations)
-gcloud auth login
-gcloud config set project gen-lang-client-0314607994
+# 4. GCS authentication (for data loading from GCS bucket)
+gcloud auth application-default login
 
 # 5. Copy local env file
 cp .env.dev.example .env
@@ -507,44 +487,11 @@ cp .env.dev.example .env
 
 ---
 
-### Hieu — DataCrawler + Spark ETL
+### Hieu — Assist Thanh with Streaming
 
 #### Local Dev
 
-```bash
-# 1. Start the local dev stack (includes PG + InfluxDB + Model API)
-docker compose -f docker-compose.dev.yml up -d postgres
-
-# 2. Work on DataCrawler GCS upload (core/data_crawler.py)
-#    Test GCS upload locally — needs GCP auth:
-gcloud auth application-default login
-python core/data_crawler.py --years 2024 --upload-to-gcs
-
-# 3. Verify data landed in GCS:
-gsutil ls gs://f1chubby-raw-gen-lang-client-0314607994/2024/
-
-# 4. Work on Spark ETL (spark/etl_pipeline.py)
-#    Test locally with pyspark (install: pip install pyspark)
-#    Use local PG from docker-compose.dev.yml:
-pip install pyspark
-python spark/etl_pipeline.py --local \
-  --gcs-path gs://f1chubby-raw-gen-lang-client-0314607994/ \
-  --pg-host localhost --pg-port 5432 --pg-user f1admin --pg-password localdev123
-
-# 5. Verify PG data:
-docker compose -f docker-compose.dev.yml exec postgres \
-  psql -U f1admin -d f1chubby -c "SELECT COUNT(*) FROM session_results;"
-```
-
-#### Deploy to Dataproc
-
-> **Do NOT run `gcloud dataproc` commands manually.** The cluster is managed by Terraform and jobs are submitted via CI.
-
-1. Push your `spark/etl_pipeline.py` to the `main` branch (or your feature branch and merge)
-2. Go to **Actions → Deploy Dataproc Jobs → Run workflow**
-3. Select **`etl`** from the dropdown and click **Run workflow**
-4. The CI will ensure the cluster exists, upload your Spark file, and submit the job
-5. Monitor the job in the GitHub Actions log or in the [Dataproc console](https://console.cloud.google.com/dataproc/jobs?project=gen-lang-client-0314607994)
+Hieu's DataCrawler and Spark ETL tasks are completed/presentation-only. Primary focus is now assisting Thanh with the simulation and streaming work. See Thanh's section below for dev instructions.
 
 ---
 
@@ -616,7 +563,7 @@ python simulation_service.py --replay-race 2024_bahrain_R --speed 10.0
 ```bash
 # Extract race replay to parquet (runs FastF1, writes to replay_cache/)
 python scripts/precache_replay.py --race 2024_bahrain_R --output replay_cache/
-gsutil -m cp -r replay_cache/ gs://f1chubby-replay-gen-lang-client-0314607994/
+gsutil -m cp -r replay_cache/ gs://f1chubby-raw-gen-lang-client-0314607994/replay/
 ```
 
 #### Local Dev — Spark Streaming
@@ -671,7 +618,7 @@ gcloud compute ssh f1-chubby-vm --zone asia-southeast1-b \
 #### Local Dev
 
 ```bash
-# 1. Start the full local dev stack
+# 1. Start the local dev stack (InfluxDB + Model API — no postgres needed for Streamlit)
 docker compose -f docker-compose.dev.yml up --build
 
 # 2. Open http://localhost:8501 — Streamlit with hot reload
@@ -746,7 +693,8 @@ Reference materials for slide content:
 
 ```bash
 docker compose -f docker-compose.dev.yml up --build
-# postgres (5432) + influxdb (8086) + model-api (8080) + etl (one-shot) + streamlit (8501)
+# influxdb (8086) + model-api (8080) + streamlit (8501)
+# postgres (5432) + etl available but optional (for Long's training pipeline only)
 ```
 
 #### Reset local data

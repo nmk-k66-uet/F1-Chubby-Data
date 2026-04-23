@@ -32,6 +32,8 @@ resource "google_project_service" "apis" {
     "storage.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
+    "apikeys.googleapis.com",
+    "generativelanguage.googleapis.com",
   ])
 
   project = var.project_id
@@ -83,11 +85,14 @@ module "database" {
 module "compute" {
   source = "./modules/compute"
 
-  project_id   = var.project_id
-  region       = var.region
-  zone         = var.zone
-  machine_type = var.vm_machine_type
-  subnet_id    = module.networking.subnet_id
+  project_id       = var.project_id
+  region           = var.region
+  zone             = var.zone
+  machine_type     = var.vm_machine_type
+  subnet_id        = module.networking.subnet_id
+  gemini_api_key    = google_apikeys_key.gemini.key_string
+  gcs_cache_bucket  = "f1chubby-cache-${var.project_id}"
+  gcs_models_bucket = "f1chubby-models-${var.project_id}"
 
   depends_on = [google_project_service.apis]
 }
@@ -161,6 +166,7 @@ locals {
     "roles/iam.serviceAccountAdmin",
     "roles/iam.workloadIdentityPoolAdmin",
     "roles/resourcemanager.projectIamAdmin",
+    "roles/serviceusage.apiKeysAdmin",
   ]
 }
 
@@ -227,4 +233,30 @@ resource "google_project_iam_member" "tfc_roles" {
   project = var.project_id
   role    = each.value
   member  = "serviceAccount:${google_service_account.tfc.email}"
+}
+
+# --- VM Service Account: GCS access ---
+
+resource "google_storage_bucket_iam_member" "vm_bucket_access" {
+  for_each = module.storage.bucket_names
+
+  bucket = each.value
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${module.compute.vm_service_account_email}"
+}
+
+# --- Gemini API Key (restricted to Generative Language API) ---
+
+resource "google_apikeys_key" "gemini" {
+  project      = var.project_id
+  name         = "gemini-streamlit"
+  display_name = "Gemini API Key for Streamlit"
+
+  restrictions {
+    api_targets {
+      service = "generativelanguage.googleapis.com"
+    }
+  }
+
+  depends_on = [google_project_service.apis]
 }

@@ -64,4 +64,4 @@ jobs:
           gcloud compute ssh ${{ env.VM_NAME }} \
             --zone ${{ env.ZONE }} \
             --quiet \
-            --command "cd ~/app && docker compose up -d --build --remove-orphans"
+            --command "cd ~/app && sudo docker compose up -d --build --remove-orphans"
