@@ -62,7 +62,7 @@ jobs:
             --master-boot-disk-size 50GB \
             --image-version 2.1-debian11 \
             --initialization-actions gs://goog-dataproc-initialization-actions-${{ env.REGION }}/python/pip-install.sh \
-            --metadata PIP_PACKAGES="fastf1 streamlit psycopg2-binary" \
+            --metadata PIP_PACKAGES="fastf1 psycopg2-binary" \
             --max-idle 600s \
             --project ${{ env.PROJECT_ID }} \
             --bucket ${{ env.STAGING_BUCKET }}
