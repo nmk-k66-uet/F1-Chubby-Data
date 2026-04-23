@@ -1,3 +1,10 @@
+# Dedicated service account for the VM
+resource "google_service_account" "f1_vm" {
+  project      = var.project_id
+  account_id   = "f1-vm-sa"
+  display_name = "F1 Chubby VM Service Account"
+}
+
 resource "google_compute_address" "f1_static_ip" {
   name    = "f1-chubby-static-ip"
   project = var.project_id
@@ -14,8 +21,8 @@ resource "google_compute_instance" "f1_vm" {
 
   boot_disk {
     initialize_params {
-      image = "projects/cos-cloud/global/images/family/cos-stable"
-      size  = 30
+      image = "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64"
+      size  = 50
       type  = "pd-standard"
     }
   }
@@ -30,35 +37,31 @@ resource "google_compute_instance" "f1_vm" {
   metadata = {
     enable-oslogin = "TRUE"
 
-    # Container-Optimized OS: use cloud-init to install docker-compose
     user-data = <<-EOF
       #cloud-config
-      write_files:
-      - path: /etc/systemd/system/f1-services.service
-        permissions: '0644'
-        content: |
-          [Unit]
-          Description=F1 Chubby Services
-          After=docker.service
-          Requires=docker.service
-
-          [Service]
-          Type=oneshot
-          RemainAfterExit=yes
-          ExecStart=/bin/true
-
-          [Install]
-          WantedBy=multi-user.target
+      package_update: true
 
       runcmd:
-      - echo "F1 Chubby VM ready. Docker available via COS."
+      - curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+      - sh /tmp/get-docker.sh
+      - systemctl enable docker
+      - systemctl start docker
+      - |
+        # Write .env to a fixed global path so any OS Login user (incl. GitHub Actions SA) can find it
+        mkdir -p /opt/f1chubby
+        cat > /opt/f1chubby/.env <<DOTENV
+        GEMINI_API_KEY=${var.gemini_api_key}
+        GCS_CACHE_BUCKET=${var.gcs_cache_bucket}
+        GCS_MODELS_BUCKET=${var.gcs_models_bucket}
+        DOTENV
+        chmod 644 /opt/f1chubby/.env
+      - echo "F1 Chubby VM ready. Docker installed via get-docker.sh."
     EOF
   }
 
   service_account {
-    scopes = [
-      "cloud-platform",
-    ]
+    email  = google_service_account.f1_vm.email
+    scopes = ["cloud-platform"]
   }
 
   scheduling {

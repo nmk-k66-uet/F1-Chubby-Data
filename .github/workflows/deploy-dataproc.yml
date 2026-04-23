@@ -21,7 +21,6 @@ permissions:
 env:
   PROJECT_ID: gen-lang-client-0314607994
   REGION: asia-southeast1
-  ZONE: asia-southeast1-a
   CLUSTER_NAME: f1-chubby-spark
   STAGING_BUCKET: f1chubby-dataproc-staging-gen-lang-client-0314607994
 
@@ -44,14 +43,18 @@ jobs:
       - name: Upload Spark jobs and dependencies to GCS
         run: |
           gsutil cp spark/*.py gs://${{ env.STAGING_BUCKET }}/spark/
-          zip -r core_dependencies.zip core/
-          gsutil cp core_dependencies.zip gs://${{ env.STAGING_BUCKET }}/spark/
+
+      - name: Delete stale cluster if exists
+        run: |
+          gcloud dataproc clusters delete ${{ env.CLUSTER_NAME }} \
+            --region ${{ env.REGION }} \
+            --project ${{ env.PROJECT_ID }} \
+            --quiet || true
 
       - name: Create Dataproc cluster
         run: |
           gcloud dataproc clusters create ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }} \
-            --zone ${{ env.ZONE }} \
             --single-node \
             --master-machine-type n1-standard-4 \
             --master-boot-disk-size 50GB \

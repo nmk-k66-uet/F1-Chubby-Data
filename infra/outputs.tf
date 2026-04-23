@@ -75,3 +75,14 @@ output "tfc_sa_email" {
   description = "TFC Dynamic Provider Credentials: set as TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL value"
   value       = google_service_account.tfc.email
 }
+
+# --- Gemini API Key ---
+output "gemini_api_key" {
+  value     = google_apikeys_key.gemini.key_string
+  sensitive = true
+}
+
+# --- VM Service Account ---
+output "vm_service_account_email" {
+  value = module.compute.vm_service_account_email
+}

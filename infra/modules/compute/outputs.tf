@@ -13,3 +13,7 @@ output "vm_internal_ip" {
 output "vm_zone" {
   value = google_compute_instance.f1_vm.zone
 }
+
+output "vm_service_account_email" {
+  value = google_service_account.f1_vm.email
+}

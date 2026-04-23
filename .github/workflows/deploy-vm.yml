@@ -49,7 +49,7 @@ jobs:
           # Copy core app files
           gcloud compute scp --recurse \
             main.py Dockerfile docker-compose.yml requirements-streamlit.txt \
-            .streamlit core components pages model_serving sql \
+            .streamlit core components pages assets model_serving sql \
             ${{ env.VM_NAME }}:~/app/ \
             --zone ${{ env.ZONE }} \
             --quiet
@@ -64,4 +64,4 @@ jobs:
           gcloud compute ssh ${{ env.VM_NAME }} \
             --zone ${{ env.ZONE }} \
             --quiet \
-            --command "cd ~/app && docker compose up -d --build --remove-orphans"
+            --command "cp /opt/f1chubby/.env ~/app/.env && cd ~/app && sudo docker compose up -d --build --remove-orphans"

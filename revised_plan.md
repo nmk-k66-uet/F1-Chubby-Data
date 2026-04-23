@@ -4,7 +4,7 @@
 
 A big-data pipeline for Formula 1 race analytics and real-time prediction, built as a Final Term Project demo. The system ingests historical and live (simulated) F1 data through a multi-layer architecture: ingestion, storage, batch/stream processing, and visualization — all running on Google Cloud Platform (GCP).
 
-The serving layer uses **two databases matched to workload type**: PostgreSQL for relational historical analytics, InfluxDB for time-series live streaming data. A **Model Serving API** (technology-agnostic) provides a decoupled inference endpoint for real-time predictions. During a live/simulated race, visualization of race data is **never blocked** by prediction — the two streaming paths are fully decoupled.
+The serving layer uses **GCS + InfluxDB**: GCS (with on-demand download/upload caching via `GCStorage` in `core/data_loader.py`) for historical data, InfluxDB for time-series live streaming data. PostgreSQL is retained only for the model training pipeline's data storage needs. A **Model Serving API** (technology-agnostic) provides a decoupled inference endpoint for real-time predictions. During a live/simulated race, visualization of race data is **never blocked** by prediction — the two streaming paths are fully decoupled.
 
 ---
 
@@ -57,8 +57,7 @@ flowchart LR
     PUBSUB --> SLOW --> MLAPI --> INFLUX
 
     GCS -->|load model| MLAPI
-
-    PG --> UI
+    GCS -->|FastF1 cache + SDK| UI
     INFLUX --> UI
 ```
 
@@ -117,15 +116,15 @@ flowchart TD
     S_WRITE --> PRED[predictions]
 ```
 
-### Dual-Database Serving Strategy
+### Serving Strategy (GCS + InfluxDB)
 
 ```mermaid
 flowchart LR
-    subgraph PG ["PostgreSQL | Historical"]
-        RC[race_calendar]
-        SR[session_results]
-        DS[driver_standings]
-        CS[constructor_standings]
+    subgraph GCS_CACHE ["GCS + Local Cache | Historical"]
+        SCHED[Race Schedules]
+        RESULTS[Session Results]
+        STANDS[Standings]
+        TEL_CACHE[Telemetry Cache]
     end
 
     subgraph IDB ["InfluxDB | Live"]
@@ -141,13 +140,17 @@ flowchart LR
         GEAR[Gear Shift Maps]
     end
 
+    subgraph PG ["PostgreSQL | Training Only"]
+        PG_DATA[Model Training Data<br/>managed by training pipeline]
+    end
+
     subgraph ST ["Streamlit"]
         HIST[Historical Views]
         LIVE[Live Race Views]
         HIRES[Replay + Dominance]
     end
 
-    RC & SR & DS & CS --> HIST
+    SCHED & RESULTS & STANDS & TEL_CACHE --> HIST
     LP & LTM & LRC & PRED --> LIVE
     REPLAY & DOM & GEAR --> HIRES
 ```
@@ -180,14 +183,13 @@ flowchart LR
 
 ### 2. Ingestion Layer
 
-#### DataCrawler (Extended)
+#### DataCrawler (Completed)
 
-- **Role:** Extends the existing `DataCrawler.py` to serve as the ingestion layer. Extracts data from the FIA API via FastF1, normalizes it, saves locally, and uploads raw data to Cloud Storage.
+- **Role:** Served as the ingestion layer during development. Extracted data from the FIA API via FastF1, normalized it, saved locally, and uploaded raw data to Cloud Storage.
+- **Current Status:** ✅ **Completed.** All historical data has been crawled and uploaded to GCS. The DataCrawler is no longer actively running but is kept in the architecture for documentation purposes.
 - **Outputs:**
-  - **To GCS** (`DC --> GCS`): Raw session data, partitioned as `gs://f1chubby-raw/{year}/{round}/{session}/`. Used by the batch processing path.
-  - **To local CSV** (`f1_cache/historical_data_v2.csv`): ML training features (existing behavior, preserved).
-- **Implementation:** Already exists as `DataCrawler.py`. Extended with `google-cloud-storage` SDK calls for GCS upload. Handles API rate limits (15s delay), retries, and resumable crawling (existing checkpoint logic).
-- **Why not a separate Ingestion Service:** The DataCrawler already does extraction + normalization + resumable crawling. Adding GCS upload is ~30 lines of code. Building a separate service adds ~4 hours of work with no architectural benefit for a PoC.
+  - **To GCS** (`DC --> GCS`): Raw session data, partitioned as `gs://f1chubby-raw/{year}/{round}/{session}/`.
+  - **To local CSV** (`f1_cache/historical_data_v2.csv`): ML training features.
 
 ### 3. Storage Layer
 
@@ -195,9 +197,8 @@ flowchart LR
 
 - **Role:** Durable store for raw historical data, model artifacts, and replay cache.
 - **Buckets:**
-  - `f1chubby-raw/` — Raw session data from DataCrawler, partitioned by `{year}/{round}/{session}/`.
+  - `f1chubby-raw/` — Raw session data and FastF1 cache, partitioned by `{year}/{round}/{session}/`. Also serves as the primary historical data source for the Streamlit dashboard (via `GCStorage` class in `core/data_loader.py` with bidirectional caching: downloads from GCS if available, falls back to FastF1, uploads new cache back to GCS, then cleans up the local copy).
   - `f1chubby-models/` — Trained model artifacts (`pre_race_model.pkl`, `in_race_model.pkl`).
-  - `f1chubby-replay/` — Pre-extracted race telemetry for the Simulation Service.
 - **Storage class:** Standard, single region (`asia-southeast1`).
 
 #### Cloud Pub/Sub
@@ -214,41 +215,29 @@ flowchart LR
 - **Retention:** 1 day (sufficient for demo).
 - **Why Pub/Sub over managed Kafka:** Native GCP, simpler setup (no namespace/TU config), automatic parallelism (no partition management), cheaper for demo volume. Trade-off: not Kafka API-compatible — producer/consumer code uses `google-cloud-pubsub` SDK instead of `kafka-python`.
 
-### 4. Serving Layer (Dual-Database)
+### 4. Serving Layer
 
-The serving layer uses two databases, each matched to its workload type. This is a deliberate architectural decision: relational analytics need JOINs, GROUP BY, ORDER BY, and window functions; live streaming data needs fast time-indexed appends and time-range queries.
+The serving layer combines GCS (with local disk cache) for historical data and InfluxDB for live streaming data. PostgreSQL is retained only for the model training pipeline.
 
 ```mermaid
 flowchart TD
-    Q1["GROUP BY (Driver, Stint, Compound)"] --> PG[(PostgreSQL)]
-    Q2["ORDER BY Position"] --> PG
-    Q3["JOIN results ⋈ standings"] --> PG
-    Q4["Window: LAG/LEAD for gaps"] --> PG
+    Q1["FastF1 session load"] --> GCS_SDK[GCS SDK + Local Cache]
+    Q2["Schedule / Results / Standings"] --> GCS_SDK
+    Q3["Telemetry / Laps"] --> GCS_SDK
 
     Q5["Append car position @ timestamp"] --> INFLUX[(InfluxDB)]
     Q6["Range query: last 30 seconds"] --> INFLUX
     Q7["Downsample: 10Hz → 1Hz"] --> INFLUX
 ```
 
-#### PostgreSQL — Historical Analytics
+#### PostgreSQL — Model Training Data Storage
 
-- **Role:** Serving database for all historical/batch-processed data.
+- **Role:** Storage database for the model training pipeline. **No longer used by the Streamlit dashboard** — historical data for the UI is served from GCS via FastF1 cache.
 - **Deployment:** Cloud SQL for PostgreSQL.
 - **Instance:** db-f1-micro (shared-core, 0.6 GB RAM). **Stopped when idle** to save cost.
-- **Current Status:** ✅ Deployed at `<CLOUD_SQL_IP>`, database `f1chubby`, user `f1admin`. Data loaded for 2024 (1,078 session results, 24 rounds standings), 2025 (1,079 session results, 24 rounds standings), 2026 (154 session results, 3 rounds standings).
-- **Why PostgreSQL over InfluxDB for historical data:**
-  - Dashboard queries involve complex SQL: `GROUP BY`, `ORDER BY`, `JOIN`, window functions.
-  - FastF1 data is fundamentally relational: results are tabular, laps indexed by LapNumber (not timestamp), telemetry indexed by Distance (meters).
-  - InfluxDB's Flux query language cannot express multi-key aggregations, pivots, or JOINs.
-
-- **Tables (deployed via `sql/init.sql`):**
-
-  | Table | Source | Contents | Dashboard View |
-  |-------|--------|----------|----------------|
-  | `race_calendar` | ETL script (`scripts/load_historical_data.py`) | Season schedules, event dates, circuits, country codes, event format | Calendar page, home page |
-  | `session_results` | ETL script | Finishing order, grid, points, status, Q1/Q2/Q3 times, best lap time per driver per session (Q/R/S) | Results tab, event highlights |
-  | `driver_standings` | ETL script (computed from `session_results`) | Cumulative championship points and wins after each round | Drivers page |
-  | `constructor_standings` | ETL script (computed from `session_results`) | Constructor championship points and wins after each round | Constructors page |
+- **Current Status:** ✅ Deployed at `<CLOUD_SQL_IP>`, database `f1chubby`, user `f1admin`. Data loaded for 2024–2026. Schema and usage managed by the model training pipeline (Long).
+- **Tables (deployed via `sql/init.sql`):** `race_calendar`, `session_results`, `driver_standings`, `constructor_standings` — pre-seeded via CSV import. Available for the training pipeline to use freely.
+- **Note:** The Spark ETL pipeline (GCS → PostgreSQL) is kept in the architecture diagrams for presentation purposes but has been pre-seeded locally. The Streamlit app does not query PostgreSQL.
 
 #### InfluxDB — Live Streaming Data
 
@@ -461,7 +450,7 @@ flowchart LR
 
 #### Streamlit App
 
-- **Role:** User-facing dashboard. Reads from Cloud SQL PostgreSQL (historical), InfluxDB (live), and FastF1 cache (high-res telemetry).
+- **Role:** User-facing dashboard. Reads from GCS bucket (via FastF1 SDK with local disk cache) for historical data, InfluxDB for live race data, and FastF1 cache for high-res telemetry.
 
 ```mermaid
 flowchart TD
@@ -481,7 +470,7 @@ flowchart TD
         HEALTH[Pipeline Health Panel]
     end
 
-    PG[(Cloud SQL<br/>PostgreSQL)] --> CAL & RES & STAND & LAPS & STRAT & TEL
+    GCS_CACHE[GCS + Local Cache<br/>via FastF1 SDK] --> CAL & RES & STAND & LAPS & STRAT & TEL
     INFLUX[(InfluxDB)] --> LIVE_T & LIVE_TM & LIVE_RC & LIVE_P
     FF1[FastF1 Cache] --> REPLAY & DOM
     MONITOR[Cloud Monitoring<br/>+ DB Metadata<br/>+ Model API /health] --> HEALTH
@@ -489,37 +478,37 @@ flowchart TD
 
 - **Data sources by view:**
 
-  | View | Database | Query Method |
-  |------|----------|-------------|
-  | Calendar, event list | Cloud SQL PostgreSQL | `psycopg2` / SQLAlchemy |
-  | Session results, standings | Cloud SQL PostgreSQL | SQL queries |
-  | Lap time charts, strategy analysis | Cloud SQL PostgreSQL | SQL with GROUP BY |
-  | Telemetry comparison | Cloud SQL PostgreSQL + FastF1 cache | SQL + fallback |
+  | View | Data Source | Query Method |
+  |------|------------|-------------|
+  | Calendar, event list | GCS + FastF1 cache | `fastf1.get_event_schedule()` |
+  | Session results, standings | GCS + FastF1 cache | `fastf1.get_session()` via GCS-backed cache |
+  | Lap time charts, strategy analysis | GCS + FastF1 cache | FastF1 session laps |
+  | Telemetry comparison | GCS + FastF1 cache | FastF1 session telemetry |
   | Race replay engine | FastF1 cache (requires 100ms interpolated X/Y) | Existing logic |
   | Track dominance, gear maps | FastF1 cache (per-meter Distance index) | Existing logic |
   | **Live race tracker** | InfluxDB `live_positions` | `influxdb-client` |
   | **Live timing board** | InfluxDB `live_timing` | `influxdb-client` |
   | **Race control feed** | InfluxDB `live_race_control` | `influxdb-client` |
   | **AI Predictions panel** | InfluxDB `predictions` | `influxdb-client` |
-  | **Pipeline health** | Cloud Monitoring + DB metadata + Model API `/health` | REST API + queries |
+  | **Pipeline health** | Cloud Monitoring + InfluxDB metadata + Model API `/health` | REST API + queries |
 
 - **Prediction Staleness Indicator:** Live predictions panel displays the timestamp of the last prediction update. If >15 seconds stale, show warning badge. Makes the fast/slow path latency tradeoff visible.
 
 - **Pipeline Health Panel:**
   - Pub/Sub subscription backlog (via Cloud Monitoring API or `gcloud pubsub subscriptions describe`)
-  - Last write timestamp per InfluxDB measurement and PostgreSQL table
+  - Last write timestamp per InfluxDB measurement
   - Dataproc job status (Dataproc REST API or `gcloud dataproc jobs list`)
   - Model Serving API health, model version, inference latency (via `/health` endpoint)
 
-- **High-Resolution Telemetry:** Race replay, track dominance, and gear maps require 100ms-interpolated X/Y coordinates and per-meter Distance indexing. This data is too granular for either database to serve efficiently. **Keep the existing FastF1 cache + Pandas in-memory approach.** The batch pipeline loads summary-level telemetry to PostgreSQL; full-resolution telemetry is served from cache.
+- **High-Resolution Telemetry:** Race replay, track dominance, and gear maps require 100ms-interpolated X/Y coordinates and per-meter Distance indexing. This data is too granular for InfluxDB to serve efficiently. **Keep the existing FastF1 cache + Pandas in-memory approach.** Full-resolution telemetry is served from the GCS-backed local cache.
 
-- **Deployment:** Docker container on the GCE VM via `docker-compose`, co-located with InfluxDB and Model Serving API. Accessible at `https://f1.thedblaster.id.vn` via Cloudflare (SSL Flexible, proxied A record → `<VM_IP>`). Port mapping: host 80 → container 8501. FastF1 cache persists on the VM's disk via a host volume mount (`./f1_cache:/app/f1_cache`), eliminating cold-start data loading issues. The Streamlit container uses a separate `requirements-streamlit.txt` (excludes `scikit-learn`/`joblib`) for a lighter image — all ML inference is handled by the Model Serving API, not inline.
-- **Current Status:** ✅ Live at `https://f1.thedblaster.id.vn`. Home page, drivers standings, constructors standings, and race details pages all serve data from Cloud SQL PostgreSQL with FastF1 fallback. Pre-race and in-race predictions route through the Model Serving API.
+- **Deployment:** Docker container on the GCE VM via `docker-compose`, co-located with InfluxDB and Model Serving API. Accessible at `https://f1.thedblaster.id.vn` via Cloudflare (SSL Flexible, proxied A record → `<VM_IP>`). Port mapping: host 80 → container 8501. The container mounts `./f1_cache:/app/f1_cache` but the directory starts empty on the VM — `GCStorage` in `core/data_loader.py` downloads session cache from GCS on-demand and cleans up after each load. The deploy-vm CI workflow intentionally does **not** copy `f1_cache` to the VM, keeping deployments fast and lightweight. The Streamlit container uses a separate `requirements-streamlit.txt` (excludes `scikit-learn`/`joblib`) for a lighter image — all ML inference is handled by the Model Serving API, not inline. GCS access uses Application Default Credentials (ADC) via the VM's service account.
+- **Current Status:** ✅ Live at `https://f1.thedblaster.id.vn`. Home page, drivers standings, constructors standings, and race details pages serve data from GCS via FastF1 cache (with Ergast API fallback for standings). Pre-race and in-race predictions route through the Model Serving API.
 
 - **ML Decoupling:**
   - **In-race predictions:** The Streamlit app reads predictions from InfluxDB `predictions` measurement (written by the Spark Streaming slow path via the Model Serving API). It does **not** import `ml_core.py` or load `.pkl` files. A staleness indicator shows when predictions are stale (>15s yellow, >30s red).
   - **Pre-race predictions:** The Streamlit app sends features to the Model Serving API via `POST /predict-prerace` and displays the returned probabilities. The interactive "Generate Predictions" button is preserved.
-  - **Local development mode:** A `LOCAL_MODE` environment variable preserves the existing FastF1-slicing + inline inference behavior for development without the full pipeline running.
+  - **Local development mode:** GCS access uses Application Default Credentials. Developers run `gcloud auth application-default login` locally. The `GCS_BUCKET` env var (default: `f1chubby-raw`) is configurable via docker-compose.
 
 ---
 
@@ -530,8 +519,8 @@ flowchart TD
 | Resource | GCP Service | Config | Purpose |
 |----------|-------------|--------|---------|
 | Pub/Sub Topics + Subscriptions | Cloud Pub/Sub | 3 topics, 6 subscriptions | Streaming message bus |
-| Storage Buckets | Cloud Storage | Standard, `asia-southeast1` | Raw data, models, replay cache |
-| PostgreSQL Instance | Cloud SQL | db-f1-micro (stop when idle) | Historical analytics serving DB |
+| Storage Buckets | Cloud Storage | Standard, `asia-southeast1` | Raw data + FastF1 cache, model artifacts |
+| PostgreSQL Instance | Cloud SQL | db-f1-micro (stop when idle) | Model training data storage |
 | Virtual Machine | Compute Engine | e2-medium (2 vCPU, 4 GB), static IP `<VM_IP>` | Hosts InfluxDB + Model Serving API + Streamlit (docker-compose) |
 | Spark Clusters | Dataproc | Single-node n1-standard-4, auto-delete | Batch + 2× Streaming jobs |
 
@@ -812,12 +801,13 @@ flowchart TD
 
 ## Key Design Decisions
 
-### 1. Dual-Database Serving Layer (PostgreSQL + InfluxDB)
+### 1. GCS + InfluxDB Serving Layer
 
-Workload-driven database selection:
-- **PostgreSQL** for historical data: the dashboard requires `GROUP BY (Driver, Stint, Compound)`, `ORDER BY Position`, JOINs, and window functions — all native SQL. FastF1's data model is fundamentally relational.
+Workload-driven data source selection:
+- **GCS (via FastF1 SDK with local disk cache)** for historical data: session data is downloaded from GCS on first access and cached locally in `f1_cache/`. FastF1 handles session loading, telemetry, laps natively. This eliminates the PostgreSQL dependency for the dashboard while leveraging GCS durability and FastF1's built-in caching.
 - **InfluxDB** for live streaming: append-heavy, time-indexed, short retention, no joins. Time-series DB is the right tool.
-- Demonstrates understanding of database selection tradeoffs.
+- **PostgreSQL** retained only for the model training pipeline's data storage needs (managed by training team).
+- Demonstrates understanding of storage selection tradeoffs.
 
 ### 2. Decoupled Fast/Slow Streaming Paths
 
@@ -825,7 +815,7 @@ Two independent Spark Streaming jobs with **backpressure isolation**: if the pre
 
 ### 3. Pragmatic Telemetry Strategy
 
-Summary telemetry (sector speeds, top speeds) is batch-processed into PostgreSQL. Full-resolution telemetry (100ms X/Y interpolation for replay, per-meter Distance indexing for dominance maps) stays in FastF1 cache + Pandas in-memory. Neither PostgreSQL nor InfluxDB serves this data efficiently — and the existing implementation already works.
+Full-resolution telemetry (100ms X/Y interpolation for replay, per-meter Distance indexing for dominance maps) stays in FastF1 cache + Pandas in-memory, backed by GCS. InfluxDB is not suitable for this data — and the existing implementation already works.
 
 ### 4. Two ML Models (Pre-Race + In-Race)
 
@@ -833,9 +823,9 @@ Summary telemetry (sector speeds, top speeds) is batch-processed into PostgreSQL
 - **In-race**: Live features → predicted finishing position, updated lap-by-lap.
 - Different feature sets, different inference timing, different serving paths. Architecturally clean.
 
-### 5. DataCrawler as Ingestion Layer
+### 5. DataCrawler as Ingestion Layer (Completed)
 
-Extended `DataCrawler.py` with GCS upload rather than a separate Ingestion Service. Same architectural role, less code to build and maintain. The diagram still shows a distinct ingestion layer.
+Used `DataCrawler.py` with GCS upload to crawl all historical F1 data. All data is now in GCS. The DataCrawler is no longer actively running but remains in the architecture for documentation and demonstration purposes.
 
 ### 6. Infrastructure as Code (Terraform)
 

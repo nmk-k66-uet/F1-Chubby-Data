@@ -47,7 +47,7 @@ def fragment_positions(session, drivers, session_name):
                         st.session_state[f"ch_{drv}"] = True
                         
                 def toggle_all():
-                    master_val = st.session_state["sel_all_pos"]
+                    master_val = st.session_state.get("sel_all_pos", True)
                     for d in drivers: 
                         st.session_state[f"ch_{d}"] = master_val
                         

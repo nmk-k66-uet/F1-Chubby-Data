@@ -97,11 +97,7 @@ def render_predictor_tab(session, year, round_num, event_name):
         st.session_state.pop('gemini_insight', None)
     
     # === Load Gemini API Key ===
-    gemini_key = ""
-    key_file_path = "assets/gemini_key.txt"
-    if os.path.exists(key_file_path):
-        with open(key_file_path, "r", encoding="utf-8") as f:
-            gemini_key = f.read().strip()
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
     
     gemini_client = None
     if gemini_key:
@@ -254,7 +250,7 @@ def render_predictor_tab(session, year, round_num, event_name):
                     )
                     st.session_state['gemini_insight'] = response.text
                 else:
-                    st.session_state['gemini_insight'] = "⚠️ Gemini API Key not found in assets/gemini_key.txt."
+                    st.session_state['gemini_insight'] = "⚠️ GEMINI_API_KEY environment variable not set."
 
             except Exception as e:
                 st.error(f"Analysis error: {str(e)}")

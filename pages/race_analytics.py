@@ -85,7 +85,7 @@ def render_intro_overlay():
         st.session_state['play_intro'] = False
         st.session_state['video_just_injected'] = True
         
-        video_path = f"assets/intro/{year}.mp4" 
+        video_path = f"assets/Intro/{year}.mp4" 
             
         with open(video_path, "rb") as f:
             video_b64 = base64.b64encode(f.read()).decode()
