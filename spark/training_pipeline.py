@@ -283,7 +283,7 @@ df_years = df_years.repartition(4)
 df_pre_race_features = df_years.mapInPandas(extract_pre_race_features, schema=schema_pre_race)
 
 # Save these distributed features to a single file in GCS by coalescing to 1 partition
-df_pre_race_features.coalesce(1).write.mode("overwrite").csv(f"gs://{BUCKET}/processed_features/pre_race_features", header=True)
+df_pre_race_features.coalesce(1).write.mode("overwrite").csv(f"gs://{RAW_BUCKET}/processed_features/pre_race_features", header=True)
 
 # df_pre_race_features.coalesce(1).write.mode("overwrite").csv("./local_test_output/pre_race_features", header=True)
 
@@ -306,7 +306,7 @@ df_in_race_features = df_years.mapInPandas(extract_in_race_features, schema=sche
 
 # Save these distributed features to a single file in GCS by coalescing to 1 partition
 # df_in_race_features.coalesce(1).write.mode("overwrite").csv(f"gs://{BUCKET}/processed_features/in_race_features_csv", header=True)
-df_in_race_features.coalesce(1).write.mode("overwrite").csv(f"gs://{BUCKET}/processed_features/in_race_features", header=True)
+df_in_race_features.coalesce(1).write.mode("overwrite").csv(f"gs://{RAW_BUCKET}/processed_features/in_race_features", header=True)
 
 # ==========================================
 # 4. Model Training & Upload
@@ -335,7 +335,7 @@ print("\n[ML] Starting Model Training Phase...")
 
 # 1. Read features from GCS into Pandas
 print("[ML] Reading Pre-Race features...")
-pre_race_df = spark.read.csv(f"gs://{BUCKET}/processed_features/pre_race_features", header=True, inferSchema=True).toPandas()
+pre_race_df = spark.read.csv(f"gs://{RAW_BUCKET}/processed_features/pre_race_features", header=True, inferSchema=True).toPandas()
 
 # Pre-Race Training
 # Handle missing FP2 pace
@@ -372,7 +372,7 @@ joblib.dump(grid_pre.best_estimator_, 'pre_race_model.pkl')
 
 #In-Race Training
 print("[ML] Reading In-Race features...")
-in_race_df = spark.read.csv(f"gs://{BUCKET}/processed_features/in_race_features", header=True, inferSchema=True).toPandas()
+in_race_df = spark.read.csv(f"gs://{RAW_BUCKET}/processed_features/in_race_features", header=True, inferSchema=True).toPandas()
 in_race_df = in_race_df.dropna(subset=['CurrentPosition', 'GapToLeader', 'TyreLife'])
 
 X_in = in_race_df[['LapFraction', 'CurrentPosition', 'GapToLeader', 'TyreLife', 'CompoundIdx', 'IsPitOut']]
@@ -396,13 +396,13 @@ joblib.dump(search_pod.best_estimator_, 'in_race_podium_model.pkl')
 generate_report(search_pod, X_test_in, y_test_pod, "F1 IN-RACE PODIUM", 'in_race_podium_metrics.txt')
 
 # Upload to GCS
-print("[ML] Uploading models to gs://f1chubby-models/ ...")
+print(f"[ML] Uploading models to gs://{MODELS_BUCKET}/ ...")
 def upload_model(file_name):
     try:
         client = storage.Client()
-        bucket = client.bucket("f1chubby-models")
+        bucket = client.bucket(MODELS_BUCKET)
         if not bucket.exists():
-            bucket = client.create_bucket("f1chubby-models", location="asia-southeast1")
+            bucket = client.create_bucket(MODELS_BUCKET, location="asia-southeast1")
         blob = bucket.blob(file_name)
         blob.upload_from_filename(file_name)
         print(f"Uploaded {file_name}")
