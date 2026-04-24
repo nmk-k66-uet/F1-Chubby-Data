@@ -92,7 +92,7 @@ module "compute" {
   subnet_id         = module.networking.subnet_id
   gemini_api_key    = google_apikeys_key.gemini.key_string
   gcs_cache_bucket  = "f1chubby-cache-${var.project_id}"
-  gcs_models_bucket = "f1chubby-models-${var.project_id}"
+  gcs_models_bucket = "f1chubby-model-${var.project_id}"
 
   depends_on = [google_project_service.apis]
 }

@@ -80,7 +80,7 @@ flowchart TD
         GCS_T[Cloud Storage<br/>gs://f1chubby-raw/] --> FEAT[Feature Engineering<br/>GridPos, QualDelta, PaceDelta,<br/>DriverForm, TeamTier]
         FEAT --> PRE_MODEL[Pre-Race Model Training<br/>RandomForest Classifier<br/>Target: Podium Probability]
         FEAT --> IN_MODEL[In-Race Model Training<br/>RandomForest Regressor<br/>Target: Finishing Position]
-        PRE_MODEL -->|pre_race_model.pkl| GCS_OUT[GCS gs://f1chubby-models/]
+        PRE_MODEL -->|pre_race_model.pkl| GCS_OUT[GCS gs://f1chubby-model/]
         IN_MODEL -->|in_race_model.pkl| GCS_OUT
     end
 ```
@@ -198,7 +198,7 @@ flowchart LR
 - **Role:** Durable store for raw historical data, model artifacts, and replay cache.
 - **Buckets:**
   - `f1chubby-raw/` — Raw session data and FastF1 cache, partitioned by `{year}/{round}/{session}/`. Also serves as the primary historical data source for the Streamlit dashboard (via `GCStorage` class in `core/data_loader.py` with bidirectional caching: downloads from GCS if available, falls back to FastF1, uploads new cache back to GCS, then cleans up the local copy).
-  - `f1chubby-models/` — Trained model artifacts (`pre_race_model.pkl`, `in_race_model.pkl`).
+  - `f1chubby-model/` — Trained model artifacts (`pre_race_model.pkl`, `in_race_model.pkl`).
 - **Storage class:** Standard, single region (`asia-southeast1`).
 
 #### Cloud Pub/Sub
@@ -259,14 +259,14 @@ flowchart TD
 
 - **Role:** Decoupled inference service that loads trained models and exposes a REST prediction endpoint. The Spark Streaming slow path computes features and calls this API instead of running inference inline.
 - **Deployment:** Containerized on the GCE VM (shared with InfluxDB + Streamlit) via docker-compose.
-- **Technology:** FastAPI + joblib (implemented in `model_serving/app.py`). Downloads models from GCS bucket (`gs://f1chubby-models-<PROJECT_ID>/`) on startup, caches in a Docker named volume.
+- **Technology:** FastAPI + joblib (implemented in `model_serving/app.py`). Downloads models from GCS bucket (`gs://f1chubby-model-<PROJECT_ID>/`) on startup, caches in a Docker named volume.
 - **Current Status:** ✅ Running as `f1-model-api` container on VM. Models pulled from GCS on startup (3 artifacts: `podium_model.pkl`, `in_race_win_model.pkl`, `in_race_podium_model.pkl`). Endpoints: `POST /predict-inrace`, `POST /predict-prerace`, `GET /health`. Returns normalized probabilities.
 - **Why decoupled serving:
   - Model can be **updated without restarting** the Spark Streaming job (hot-swap model versions).
   - Shows **separation of concerns** — feature computation (Spark) vs. model inference (API) are independent.
   - The serving layer is a standard production ML pattern (grading differentiator).
   - Adds a testable component with its own health check and latency metrics for the pipeline health panel.
-- **Model loading:** Loads model artifacts from GCS (`gs://f1chubby-models/`) on startup and on-demand refresh.
+- **Model loading:** Loads model artifacts from GCS (`gs://f1chubby-model/`) on startup and on-demand refresh.
 
 - **Interface Contract:**
 
@@ -360,8 +360,8 @@ flowchart TD
 - **Role:** Reads raw historical data from GCS, engineers ML features, trains both models, and uploads serialized artifacts to GCS.
 - **Jobs:**
   1. **Feature Engineering** — Compute features: grid position, qualifying delta, FP2/Sprint pace delta, driver form, team tier, tyre strategy metrics (pre-race); lap-by-lap state snapshots (in-race).
-  2. **Pre-Race Model Training** — scikit-learn RandomForest classifier on engineered features. Save to GCS (`gs://f1chubby-models/pre_race_model.pkl`).
-  3. **In-Race Model Training** — Trained on historical in-race snapshots (lap-by-lap state → final result). Save to GCS (`gs://f1chubby-models/in_race_model.pkl`).
+  2. **Pre-Race Model Training** — scikit-learn RandomForest classifier on engineered features. Save to GCS (`gs://f1chubby-model/pre_race_model.pkl`).
+  3. **In-Race Model Training** — Trained on historical in-race snapshots (lap-by-lap state → final result). Save to GCS (`gs://f1chubby-model/in_race_model.pkl`).
 - **Platform:** GCP Dataproc, single-node cluster (n1-standard-4), auto-delete after job completes.
 - **Independence:** Does not write to PostgreSQL. Can run in parallel with the ETL pipeline.
 
@@ -763,7 +763,7 @@ flowchart TD
     end
 
     subgraph "Stream A' — Model Training (Long)"
-        AT1[2.1b Spark Training] -->|trained model .pkl| AT2[GCS gs://f1chubby-models/]
+        AT1[2.1b Spark Training] -->|trained model .pkl| AT2[GCS gs://f1chubby-model/]
     end
 
     subgraph "Stream B — Streaming + Simulation (Thanh)"

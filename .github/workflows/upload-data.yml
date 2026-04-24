@@ -50,7 +50,7 @@ jobs:
         if: inputs.target == 'models' || inputs.target == 'all'
         run: |
           if [ -d "model_serving/models" ]; then
-            gsutil -m cp -r model_serving/models/* gs://f1chubby-models-${{ env.PROJECT_ID }}/
+            gsutil -m cp -r model_serving/models/* gs://f1chubby-model-${{ env.PROJECT_ID }}/
           else
             echo "No model artifacts found, skipping"
           fi

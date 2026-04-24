@@ -129,12 +129,12 @@ Write `spark/training_pipeline.py` — reads raw data from GCS, engineers featur
 - Feature Engineering: GridPosition, QualifyingDelta, FP2_PaceDelta, DriverForm, TeamTier (pre-race); lap-by-lap snapshots (in-race)
 - Train pre-race RandomForest classifier → `pre_race_model.pkl`
 - Train in-race RandomForest regressor → `in_race_model.pkl`, `in_race_podium_model.pkl`
-- Upload `.pkl` artifacts to `gs://f1chubby-models/`
+- Upload `.pkl` artifacts to `gs://f1chubby-model/`
 - Reference: existing training logic in `core/ml_core.py` (adapt for Spark scale)
 
 **Done when:**
 - [ ] Job completes on Dataproc (exit code 0)
-- [ ] `gsutil ls gs://f1chubby-models/` shows all model files
+- [ ] `gsutil ls gs://f1chubby-model/` shows all model files
 - [ ] Models loadable via `joblib.load()` and callable with feature dicts
 - [ ] Pre-race accuracy >50%, In-race MAE <3 positions
 
@@ -468,7 +468,7 @@ cp .env.dev.example .env
 | **VM** | `f1-chubby-vm` (e2-medium, static IP) |
 | **Cloud SQL** | `f1-chubby-postgres` (db-f1-micro, db=`f1chubby`, user=`f1admin`) |
 | **GCS Raw Data** | `gs://f1chubby-raw-gen-lang-client-0314607994/` |
-| **GCS Models** | `gs://f1chubby-models-gen-lang-client-0314607994/` |
+| **GCS Models** | `gs://f1chubby-model-gen-lang-client-0314607994/` |
 | **GCS Replay** | `gs://f1chubby-replay-gen-lang-client-0314607994/` |
 | **GCS Dataproc Staging** | `gs://f1chubby-dataproc-staging-gen-lang-client-0314607994/` |
 | **Pub/Sub Topics** | `f1-telemetry`, `f1-timing`, `f1-race-control` |
@@ -522,7 +522,7 @@ print('Model loaded, features:', model.n_features_in_)
 
 # 5. Upload models to GCS manually (for testing):
 gsutil cp assets/Models/*.pkl \
-  gs://f1chubby-models-gen-lang-client-0314607994/
+  gs://f1chubby-model-gen-lang-client-0314607994/
 ```
 
 #### Deploy to Dataproc
