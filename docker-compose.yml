@@ -20,9 +20,9 @@ services:
   model-api:
     build: ./model_serving
     container_name: f1-model-api
-    # No host port — internal only (accessed as model-api:8080 on docker network)
-    expose:
-      - "8080"
+    # Exposed on host for Dataproc Spark jobs; firewall restricts 8080 to subnet only
+    ports:
+      - "8080:8080"
     environment:
       MODEL_DIR: /app/models
       GCS_BUCKET: ${GCS_MODELS_BUCKET:-f1chubby-model-gen-lang-client-0314607994}

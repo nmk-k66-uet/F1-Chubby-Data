@@ -56,6 +56,10 @@ output "dataproc_staging_bucket" {
   value = module.dataproc.staging_bucket
 }
 
+output "dataproc_service_account_email" {
+  value = google_service_account.dataproc.email
+}
+
 # --- Workload Identity Federation (GitHub Actions) ---
 output "wif_provider" {
   value = google_iam_workload_identity_pool_provider.github.name

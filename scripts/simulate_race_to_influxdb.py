@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 """
-Simulate Race → InfluxDB
+Simulate Race → InfluxDB  (or Pub/Sub)
 
 Extracts lap-by-lap data from a cached FastF1 race session and drip-feeds it
 into InfluxDB measurements (`live_timing`, `predictions`, `live_race_control`).
 
+With --pubsub, publishes JSON messages to Cloud Pub/Sub topics instead of
+writing to InfluxDB directly (for testing the Dataproc Spark pipeline).
+
 Usage:
-    # Drip-feed at 1 lap/sec (default)
+    # Drip-feed at 1 lap/sec (default) → InfluxDB
     python scripts/simulate_race_to_influxdb.py
 
     # Faster replay: 5 laps/sec
     python scripts/simulate_race_to_influxdb.py --speed 5
+
+    # Publish to Pub/Sub instead of InfluxDB
+    python scripts/simulate_race_to_influxdb.py --pubsub --gcp-project my-project
 
     # Tear down all simulation data
     python scripts/simulate_race_to_influxdb.py --teardown
@@ -283,11 +289,15 @@ def write_race_control(write_api, rc_msgs, race_start_time, base_ts):
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Simulate F1 race → InfluxDB")
+    parser = argparse.ArgumentParser(description="Simulate F1 race → InfluxDB or Pub/Sub")
     parser.add_argument("--speed", type=float, default=1.0,
                         help="Replay speed in laps per second (default: 1.0)")
     parser.add_argument("--teardown", action="store_true",
                         help="Delete all simulation data from InfluxDB and exit")
+    parser.add_argument("--pubsub", action="store_true",
+                        help="Publish to Cloud Pub/Sub topics instead of InfluxDB")
+    parser.add_argument("--gcp-project", type=str, default=None,
+                        help="GCP project ID (required with --pubsub)")
     args = parser.parse_args()
 
     client = get_influx_client()
@@ -298,7 +308,15 @@ def main():
         client.close()
         return
 
-    # --- Load and prepare data ---
+    if args.pubsub:
+        return run_pubsub_mode(args)
+
+    # --- Default: write directly to InfluxDB ---
+    return run_influx_mode(args, client)
+
+
+def run_influx_mode(args, client):
+    """Original mode: write lap data directly to InfluxDB."""
     session = load_session()
     laps_df, total_laps, rc_msgs = prepare_lap_data(session)
 
@@ -309,21 +327,18 @@ def main():
     print(f"Replay speed: {args.speed} laps/sec")
     print()
 
-    # --- Teardown existing data before fresh simulation ---
     print("Clearing previous simulation data …")
     teardown(client)
 
     from influxdb_client.client.write_api import SYNCHRONOUS
     write_api = client.write_api(write_options=SYNCHRONOUS)
 
-    # --- Write race control messages upfront ---
     race_start_time = session.laps["Time"].min() if not session.laps.empty else None
     base_ts = datetime.now(timezone.utc)
     write_race_control(write_api, rc_msgs, race_start_time, base_ts)
     if rc_msgs:
         print(f"Wrote {len(rc_msgs)} race control messages.")
 
-    # --- Drip-feed lap by lap ---
     delay = 1.0 / args.speed if args.speed > 0 else 1.0
 
     for lap_num in range(1, total_laps + 1):
@@ -336,10 +351,8 @@ def main():
             print(f"  Lap {lap_num:>2}/{total_laps}  — no data, skipping")
             continue
 
-        # Fast path: live_timing
         write_timing_for_lap(write_api, lap_data, lap_num, ts)
 
-        # Slow path: predictions (written ~1s later to simulate slow path delay)
         predictions = predict_for_lap(lap_data, total_laps)
         pred_ts = datetime.now(timezone.utc)
         write_predictions_for_lap(write_api, predictions, lap_num, pred_ts)
@@ -357,6 +370,103 @@ def main():
 
     write_api.close()
     client.close()
+
+
+def run_pubsub_mode(args):
+    """Publish lap-by-lap data to Cloud Pub/Sub topics instead of InfluxDB."""
+    import json as json_mod
+    from google.cloud import pubsub_v1
+
+    if not args.gcp_project:
+        print("ERROR: --gcp-project is required with --pubsub", file=sys.stderr)
+        sys.exit(1)
+
+    project = args.gcp_project
+    publisher = pubsub_v1.PublisherClient()
+    timing_topic = publisher.topic_path(project, "f1-timing")
+    rc_topic = publisher.topic_path(project, "f1-race-control")
+
+    session = load_session()
+    laps_df, total_laps, rc_msgs = prepare_lap_data(session)
+
+    print(f"[Pub/Sub mode] Race: {YEAR} {EVENT_NAME}")
+    print(f"Total laps: {total_laps}")
+    print(f"Drivers: {laps_df['Driver'].nunique()}")
+    print(f"Race control messages: {len(rc_msgs)}")
+    print(f"Replay speed: {args.speed} laps/sec")
+    print(f"Project: {project}")
+    print()
+
+    # Publish race control messages upfront
+    for msg in rc_msgs:
+        elapsed = 0.0
+        if pd.notna(msg["time"]):
+            try:
+                t = pd.Timedelta(msg["time"]) if not isinstance(msg["time"], pd.Timedelta) else msg["time"]
+                elapsed = max(0.0, t / pd.Timedelta(seconds=1))
+            except Exception:
+                pass
+
+        payload = json_mod.dumps({
+            "timestamp_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+            "flag": msg["flag"],
+            "scope": "Track",
+            "message": msg["message"],
+            "driver_id": None,
+            "lap_number": None,
+        }).encode("utf-8")
+        publisher.publish(rc_topic, payload)
+
+    if rc_msgs:
+        print(f"Published {len(rc_msgs)} race control messages.")
+
+    # Drip-feed lap by lap
+    delay = 1.0 / args.speed if args.speed > 0 else 1.0
+
+    for lap_num in range(1, total_laps + 1):
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+        lap_data = laps_df[laps_df["LapNumber"] == lap_num].dropna(subset=["CurrentPosition"]).copy()
+        lap_data = lap_data.sort_values("CurrentPosition")
+
+        if lap_data.empty:
+            print(f"  Lap {lap_num:>2}/{total_laps}  — no data, skipping")
+            continue
+
+        futures = []
+        for _, row in lap_data.iterrows():
+            payload = json_mod.dumps({
+                "timestamp_ms": now_ms,
+                "driver_id": str(row["Driver"]),
+                "lap_number": int(lap_num),
+                "position": int(row["CurrentPosition"]),
+                "lap_time_ms": float(row.get("LapTimeMs", 0)) or None,
+                "gap_to_leader_ms": float(row.get("GapToLeader", 0)),
+                "interval_ms": float(row.get("Interval", 0)),
+                "tyre_compound": str(row.get("Compound", "MEDIUM")),
+                "tyre_age_laps": int(row.get("TyreLife", 0)),
+                "stint_number": int(row.get("Stint", 1)),
+                "pit_in_lap": bool(pd.notna(row.get("PitInTime"))),
+                "pit_out_lap": bool(row.get("IsPitOut", 0)),
+            }).encode("utf-8")
+            futures.append(publisher.publish(timing_topic, payload))
+
+        # Wait for all publishes in this lap
+        for f in futures:
+            f.result(timeout=10)
+
+        leader = lap_data.iloc[0]["Driver"]
+        print(f"  Lap {lap_num:>2}/{total_laps}  | Leader: {leader}  | {len(lap_data)} drivers  | ✓ published to Pub/Sub")
+
+        if lap_num < total_laps:
+            time.sleep(delay)
+
+    print()
+    print(f"Simulation complete — {total_laps} laps published to Pub/Sub.")
+    print(f"  Project:  {project}")
+    print(f"  Topics:   f1-timing, f1-race-control")
+    print(f"  Race ID:  {RACE_ID}")
+
 
 
 if __name__ == "__main__":

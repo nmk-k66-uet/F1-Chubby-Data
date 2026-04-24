@@ -38,7 +38,7 @@ flowchart LR
     subgraph Serving
         PG[(Cloud SQL<br/>PostgreSQL)]
         INFLUX[(InfluxDB<br/>Live)]
-        MLAPI[Model Serving API]
+        MLAPI["Model Serving API<br/>(stateless inference only)"]
     end
 
     subgraph "GCE VM (docker-compose)"
@@ -54,11 +54,15 @@ flowchart LR
     GCS --> SPARK_TRAIN -->|model artifact| GCS
 
     PUBSUB --> FAST --> INFLUX
-    PUBSUB --> SLOW --> MLAPI --> INFLUX
+    PUBSUB --> SLOW -->|features| MLAPI
+    SLOW -->|predictions| INFLUX
 
     GCS -->|load model| MLAPI
     GCS -->|FastF1 cache + SDK| UI
     INFLUX --> UI
+
+    style MLAPI fill:#e8f5e9,stroke:#2e7d32
+    linkStyle 6 stroke:#2e7d32,stroke-dasharray:5
 ```
 
 ### Batch Processing Detail
@@ -101,10 +105,10 @@ flowchart TD
         F_WRITE[Write to InfluxDB<br/>Sub-second latency]
     end
 
-    subgraph SP ["Slow Path | subscription: *-pred-slow"]
-        S_WINDOW[Windowed Feature<br/>Computation<br/>5-10 sec windows]
-        S_CALL[Call Model Serving API<br/>POST /predict]
-        S_WRITE[Write to InfluxDB<br/>predictions bucket]
+    subgraph SP ["Slow Path | subscription: f1-timing-pred-slow"]
+        S_WINDOW[Windowed Feature<br/>Computation<br/>10 sec trigger]
+        S_CALL["Call Model Serving API<br/>POST /predict-inrace<br/>(stateless — returns predictions)"]
+        S_WRITE[Spark writes predictions<br/>to InfluxDB]
     end
 
     T1 & T2 & T3 --> F_PARSE --> F_ENRICH --> F_WRITE
@@ -257,7 +261,7 @@ flowchart TD
 
 #### Model Serving API — Inference Endpoint
 
-- **Role:** Decoupled inference service that loads trained models and exposes a REST prediction endpoint. The Spark Streaming slow path computes features and calls this API instead of running inference inline.
+- **Role:** Stateless inference service that loads trained models and exposes a REST prediction endpoint. It receives features and returns predictions — it does **not** write to InfluxDB. The Spark Streaming slow path calls this API, receives predictions, and writes them to InfluxDB itself.
 - **Deployment:** Containerized on the GCE VM (shared with InfluxDB + Streamlit) via docker-compose.
 - **Technology:** FastAPI + joblib (implemented in `model_serving/app.py`). Downloads models from GCS bucket (`gs://f1chubby-model-<PROJECT_ID>/`) on startup, caches in a Docker named volume.
 - **Current Status:** ✅ Running as `f1-model-api` container on VM. Models pulled from GCS on startup (3 artifacts: `podium_model.pkl`, `in_race_win_model.pkl`, `in_race_podium_model.pkl`). Endpoints: `POST /predict-inrace`, `POST /predict-prerace`, `GET /health`. Returns normalized probabilities.
@@ -376,11 +380,11 @@ flowchart TD
 
 #### Spark Streaming — Slow Path
 
-- **Role:** Consumes live data, computes windowed features, calls the Model Serving API for inference, writes predictions to InfluxDB.
-- **Input:** Same Pub/Sub topics (separate subscriptions: `*-pred-slow`).
-- **Processing:** Windowed feature computation → HTTP POST to Model Serving API `/predict` → write response to InfluxDB.
+- **Role:** Consumes timing data, calls the Model Serving API for inference, and writes predictions to InfluxDB. The Model API is stateless — it returns predictions but does not write to any database.
+- **Input:** `f1-timing` topic (subscription: `f1-timing-pred-slow`).
+- **Processing:** Collect per-driver features → HTTP POST to Model Serving API `/predict-inrace` → receive predictions → write to InfluxDB.
 - **Output:** InfluxDB `predictions` with prediction freshness timestamp.
-- **Latency:** 5–10 second windows.
+- **Latency:** 10 second processing trigger.
 - **Failure isolation:** If prediction lags or crashes, live visualization is completely unaffected.
 
 ##### Why Two Separate Streaming Jobs

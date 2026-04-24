@@ -28,17 +28,32 @@ resource "google_compute_firewall" "allow_ssh" {
   target_tags   = ["f1-vm"]
 }
 
-resource "google_compute_firewall" "allow_app_ports" {
-  name    = "${var.network_name}-allow-app"
+resource "google_compute_firewall" "allow_app_public" {
+  name    = "${var.network_name}-allow-app-public"
   project = var.project_id
   network = google_compute_network.vpc.id
 
   allow {
     protocol = "tcp"
-    ports    = ["80", "8080", "8086", "8501"]
+    ports    = ["80"]
   }
 
   source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["f1-vm"]
+}
+
+# InfluxDB (8086) + Model API (8080) — subnet only (Dataproc → VM)
+resource "google_compute_firewall" "allow_app_internal" {
+  name    = "${var.network_name}-allow-app-internal"
+  project = var.project_id
+  network = google_compute_network.vpc.id
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8080", "8086"]
+  }
+
+  source_ranges = ["10.0.0.0/24"]
   target_tags   = ["f1-vm"]
 }
 

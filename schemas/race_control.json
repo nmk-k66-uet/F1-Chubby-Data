@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "F1 Race Control Message",
+  "description": "Pub/Sub message for f1-race-control topic — flags, penalties, track status.",
+  "type": "object",
+  "required": [
+    "timestamp_ms",
+    "flag",
+    "scope",
+    "message"
+  ],
+  "properties": {
+    "timestamp_ms": {
+      "type": "integer",
+      "description": "UTC epoch milliseconds."
+    },
+    "flag": {
+      "type": "string",
+      "description": "Flag colour / type, e.g. GREEN, YELLOW, RED, CHEQUERED, CLEAR."
+    },
+    "scope": {
+      "type": "string",
+      "enum": ["Track", "Driver", "Sector"],
+      "description": "Whether the flag applies to the whole track, a specific driver, or a sector."
+    },
+    "message": {
+      "type": "string",
+      "description": "Human-readable race control message text."
+    },
+    "driver_id": {
+      "type": ["string", "null"],
+      "description": "Three-letter driver abbreviation if message is driver-scoped."
+    },
+    "lap_number": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "Lap number when the message was issued."
+    }
+  },
+  "additionalProperties": false
+}

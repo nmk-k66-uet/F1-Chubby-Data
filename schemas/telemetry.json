@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "F1 Telemetry Message",
+  "description": "Pub/Sub message for f1-telemetry topic — high-frequency car telemetry samples.",
+  "type": "object",
+  "required": [
+    "timestamp_ms",
+    "driver_id",
+    "x",
+    "y",
+    "speed_kph",
+    "throttle_pct",
+    "brake_pct",
+    "gear",
+    "drs",
+    "lap_number",
+    "session_time_sec"
+  ],
+  "properties": {
+    "timestamp_ms": {
+      "type": "integer",
+      "description": "UTC epoch milliseconds when this telemetry sample was produced."
+    },
+    "driver_id": {
+      "type": "string",
+      "description": "Three-letter driver abbreviation."
+    },
+    "x": {
+      "type": "number",
+      "description": "Track X coordinate (metres)."
+    },
+    "y": {
+      "type": "number",
+      "description": "Track Y coordinate (metres)."
+    },
+    "speed_kph": {
+      "type": "number",
+      "minimum": 0
+    },
+    "throttle_pct": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "brake_pct": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "gear": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8
+    },
+    "drs": {
+      "type": "integer",
+      "description": "DRS status code: 0 = off, 1 = eligible, 8+ = active."
+    },
+    "lap_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "session_time_sec": {
+      "type": "number",
+      "description": "Seconds since session start."
+    }
+  },
+  "additionalProperties": false
+}
