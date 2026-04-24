@@ -51,15 +51,16 @@ def extract_pre_race_features(iterator):
     import numpy as np
     from datetime import datetime
     
-    # Import your existing local modules
-    import core.data_loader
-    from core.data_loader import load, get_schedule
+    # Import lightweight, decoupled GCS loader
+    from core.gcs_utils import get_schedule, load_with_gcs_cache
     from core.ml_core import extract_best_q_time, extract_fp2_long_run_pace, get_team_tier
     
     import uuid
     unique_cache_dir = f'f1_cache_{uuid.uuid4().hex}'
     os.makedirs(unique_cache_dir, exist_ok=True)
-    core.data_loader.CACHE_DIR = unique_cache_dir
+
+    def load(year, round_num, session_type, telemetry=False, weather=False, messages=False):
+        return load_with_gcs_cache(year, round_num, session_type, telemetry, weather, messages, cache_dir=unique_cache_dir)
     fastf1.Cache.enable_cache(unique_cache_dir)
     fastf1.set_log_level('ERROR')
     
@@ -168,14 +169,16 @@ def extract_in_race_features(iterator):
     import numpy as np
     from datetime import datetime
     
-    import core.data_loader
-    from core.data_loader import load, get_schedule
+    # Import lightweight, decoupled GCS loader
+    from core.gcs_utils import get_schedule, load_with_gcs_cache
     from core.data_crawler import map_compound
     
     import uuid
     unique_cache_dir = f'f1_cache_{uuid.uuid4().hex}'
     os.makedirs(unique_cache_dir, exist_ok=True)
-    core.data_loader.CACHE_DIR = unique_cache_dir
+
+    def load(year, round_num, session_type, telemetry=False, weather=False, messages=False):
+        return load_with_gcs_cache(year, round_num, session_type, telemetry, weather, messages, cache_dir=unique_cache_dir)
     fastf1.Cache.enable_cache(unique_cache_dir)
     fastf1.set_log_level('ERROR')
     
@@ -278,10 +281,10 @@ df_years = df_years.repartition(4)
 # Run the distributed extraction
 df_pre_race_features = df_years.mapInPandas(extract_pre_race_features, schema=schema_pre_race)
 
-# Save these distributed features to a proper parquet file in GCS
-df_pre_race_features.write.mode("overwrite").csv(f"gs://{BUCKET}/processed_features/pre_race_features.csv")
+# Save these distributed features to a single file in GCS by coalescing to 1 partition
+df_pre_race_features.coalesce(1).write.mode("overwrite").csv(f"gs://{BUCKET}/processed_features/pre_race_features", header=True)
 
-# df_pre_race_features.write.mode("overwrite").csv("./local_test_output/pre_race_features")
+# df_pre_race_features.coalesce(1).write.mode("overwrite").csv("./local_test_output/pre_race_features", header=True)
 
 schema_in_race = StructType([
     StructField("Year", IntegerType(), True),
@@ -300,6 +303,6 @@ schema_in_race = StructType([
 df_in_race_features = df_years.mapInPandas(extract_in_race_features, schema=schema_in_race)
 
 
-# Save these distributed features to a proper parquet file in GCS
-# df_in_race_features.write.mode("overwrite").csv(f"gs://{BUCKET}/processed_features/in_race_features.csv")
-df_in_race_features.write.mode("overwrite").csv(f"gs://{BUCKET}/processed_features/in_race_features")
+# Save these distributed features to a single file in GCS by coalescing to 1 partition
+# df_in_race_features.coalesce(1).write.mode("overwrite").csv(f"gs://{BUCKET}/processed_features/in_race_features_csv", header=True)
+df_in_race_features.coalesce(1).write.mode("overwrite").csv(f"gs://{BUCKET}/processed_features/in_race_features", header=True)
