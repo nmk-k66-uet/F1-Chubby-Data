@@ -9,12 +9,13 @@ is_local = sys.platform == "win32"
 if is_local:
     os.environ['PYSPARK_PYTHON'] = sys.executable
     os.environ['PYSPARK_DRIVER_PYTHON'] = sys.executable
-    os.environ['SPARK_LOCAL_IP'] = "127.0.0.1"
+    os.environ['SPARK_LOCAL_IP'] = "localhost"
     os.environ["JDK_JAVA_OPTIONS"] = "--add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED"
     os.environ["HADOOP_HOME"] = "D:\\hadoop"
     os.environ["PATH"] += os.pathsep + "D:\\hadoop\\bin"
 
-BUCKET = "f1chubby-raw-gen-lang-client-0314607994"
+RAW_BUCKET = "f1chubby-raw-gen-lang-client-0314607994"
+MODELS_BUCKET = "f1chubby-model-gen-lang-client-0314607994"
 
 builder = SparkSession.builder.appName("F1_Model_Training_Pipeline")
 
@@ -22,7 +23,7 @@ if is_local:
     # Local Windows Testing Configurations
     builder = builder \
         .master("local[*]") \
-        .config("spark.driver.host", "127.0.0.1") \
+        .config("spark.driver.host", "localhost") \
         .config("spark.driver.bindAddress", "127.0.0.1") \
         .config("spark.jars.packages", "com.google.cloud.bigdataoss:gcs-connector:hadoop3-2.2.22") \
         .config("spark.hadoop.fs.gs.impl", "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem") \
@@ -144,7 +145,7 @@ def extract_pre_race_features(iterator):
 
                     # Lưu vị trí thực tế
                     pos = pd.to_numeric(r_row['Position'], errors='coerce')
-                    final_pos = int(pos) if pd.notna(pos) else 20
+                    is_podium = 1 if pd.notna(pos) and pos <= 3 else 0
 
                     batch_features.append({
                         'Year': year, 
@@ -155,7 +156,7 @@ def extract_pre_race_features(iterator):
                         'QualifyingDelta': float(max(0, q_delta)),
                         'FP2_PaceDelta': float(fp2_delta) if pd.notna(fp2_delta) else 2.0, # default 2.0 if missing
                         'DriverForm': float(form), 
-                        'FinalPosition': final_pos
+                        'Podium': is_podium
                     })
                 
         yield pd.DataFrame(batch_features)
@@ -269,7 +270,7 @@ schema_pre_race = StructType([
     StructField("QualifyingDelta", FloatType(), True),
     StructField("FP2_PaceDelta", FloatType(), True),
     StructField("DriverForm", FloatType(), True),
-    StructField("FinalPosition", IntegerType(), True)
+    StructField("Podium", IntegerType(), True)
 ])
 
 # Create the work queue DataFrame
@@ -306,3 +307,112 @@ df_in_race_features = df_years.mapInPandas(extract_in_race_features, schema=sche
 # Save these distributed features to a single file in GCS by coalescing to 1 partition
 # df_in_race_features.coalesce(1).write.mode("overwrite").csv(f"gs://{BUCKET}/processed_features/in_race_features_csv", header=True)
 df_in_race_features.coalesce(1).write.mode("overwrite").csv(f"gs://{BUCKET}/processed_features/in_race_features", header=True)
+
+# ==========================================
+# 4. Model Training & Upload
+# ==========================================
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV
+from sklearn.metrics import accuracy_score, classification_report
+import joblib
+from google.cloud import storage
+
+def generate_report(model, X_test, y_test, model_name, file_path):
+    y_pred = model.predict(X_test)
+    acc = accuracy_score(y_test, y_pred)
+    report = classification_report(y_test, y_pred)
+    
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(f"=== MÔ HÌNH DỰ ĐOÁN {model_name} - BÁO CÁO HIỆU SUẤT ===\n")
+        f.write(f"Thời gian huấn luyện: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Bộ siêu tham số tốt nhất (Best Params): {model.best_params_}\n")
+        f.write(f"Độ chính xác tổng thể (Accuracy): {acc:.4f}\n")
+        f.write("-" * 60 + "\n")
+        f.write("Classification Report:\n")
+        f.write(report)
+
+print("\n[ML] Starting Model Training Phase...")
+
+# 1. Read features from GCS into Pandas
+print("[ML] Reading Pre-Race features...")
+pre_race_df = spark.read.csv(f"gs://{BUCKET}/processed_features/pre_race_features", header=True, inferSchema=True).toPandas()
+
+# Pre-Race Training
+# Handle missing FP2 pace
+pre_race_df['FP2_PaceDelta'] = pre_race_df['FP2_PaceDelta'].fillna(pre_race_df.groupby('TeamTier')['FP2_PaceDelta'].transform('median'))
+pre_race_df['FP2_PaceDelta'] = pre_race_df['FP2_PaceDelta'].fillna(2.0)
+
+X_pre = pre_race_df[['GridPosition', 'TeamTier', 'QualifyingDelta', 'FP2_PaceDelta', 'DriverForm']]
+if 'Podium' in pre_race_df.columns:
+    y_pre = pre_race_df['Podium']
+else:
+    y_pre = (pre_race_df['FinalPosition'] <= 3).astype(int)
+
+X_train_pre, X_test_pre, y_train_pre, y_test_pre = train_test_split(X_pre, y_pre, test_size=0.2, random_state=42, stratify=y_pre)
+
+print("[ML] Tuning Pre-Race Model...")
+base_pre = RandomForestClassifier(random_state=42, class_weight='balanced')
+grid_pre = GridSearchCV(base_pre, 
+                        param_grid={
+                            'n_estimators': [50, 100, 150, 200],
+                            'max_depth': [4, 6, 8, 10], 
+                            'min_samples_split': [2, 5, 10], 
+                            'min_samples_leaf': [1, 2, 4], 
+                            'bootstrap': [True, False]}, 
+                        cv=5, 
+                        scoring='f1', 
+                        n_jobs=-1, 
+                        verbose=1)
+grid_pre.fit(X_train_pre, y_train_pre)
+
+
+generate_report(grid_pre, X_test_pre, y_test_pre, "F1 PRE-RACE PODIUM", 'pre_race_metrics.txt')
+joblib.dump(grid_pre.best_estimator_, 'pre_race_model.pkl')
+
+
+#In-Race Training
+print("[ML] Reading In-Race features...")
+in_race_df = spark.read.csv(f"gs://{BUCKET}/processed_features/in_race_features", header=True, inferSchema=True).toPandas()
+in_race_df = in_race_df.dropna(subset=['CurrentPosition', 'GapToLeader', 'TyreLife'])
+
+X_in = in_race_df[['LapFraction', 'CurrentPosition', 'GapToLeader', 'TyreLife', 'CompoundIdx', 'IsPitOut']]
+y_win = (in_race_df['FinalPosition'] == 1).astype(int)
+y_pod = (in_race_df['FinalPosition'] <= 3).astype(int)
+
+X_train_in, X_test_in, y_train_win, y_test_win, y_train_pod, y_test_pod = train_test_split(X_in, y_win, y_pod, test_size=0.2, random_state=42, stratify=y_pod)
+
+print("[ML] Tuning In-Race Win Model...")
+base_win = RandomForestClassifier(random_state=42, class_weight='balanced')
+search_win = RandomizedSearchCV(base_win, param_distributions={'n_estimators': [100], 'max_depth': [8, 12]}, n_iter=2, cv=3, scoring='f1', n_jobs=-1, random_state=42)
+search_win.fit(X_train_in, y_train_win)
+joblib.dump(search_win.best_estimator_, 'in_race_win_model.pkl')
+generate_report(search_win, X_test_in, y_test_win, "F1 IN-RACE WIN", 'in_race_win_metrics.txt')
+
+print("[ML] Tuning In-Race Podium Model...")
+base_pod = RandomForestClassifier(random_state=42, class_weight='balanced')
+search_pod = RandomizedSearchCV(base_pod, param_distributions={'n_estimators': [100], 'max_depth': [8, 12]}, n_iter=2, cv=3, scoring='f1', n_jobs=-1, random_state=42)
+search_pod.fit(X_train_in, y_train_pod)
+joblib.dump(search_pod.best_estimator_, 'in_race_podium_model.pkl')
+generate_report(search_pod, X_test_in, y_test_pod, "F1 IN-RACE PODIUM", 'in_race_podium_metrics.txt')
+
+# Upload to GCS
+print("[ML] Uploading models to gs://f1chubby-models/ ...")
+def upload_model(file_name):
+    try:
+        client = storage.Client()
+        bucket = client.bucket("f1chubby-models")
+        if not bucket.exists():
+            bucket = client.create_bucket("f1chubby-models", location="asia-southeast1")
+        blob = bucket.blob(file_name)
+        blob.upload_from_filename(file_name)
+        print(f"Uploaded {file_name}")
+    except Exception as e:
+        print(f"Failed to upload {file_name}: {e}")
+
+upload_model('pre_race_model.pkl')
+upload_model('pre_race_metrics.txt')
+upload_model('in_race_win_model.pkl')
+upload_model('in_race_win_metrics.txt')
+upload_model('in_race_podium_model.pkl')
+upload_model('in_race_podium_metrics.txt')
+print("[ML] Training Pipeline Completed Successfully!")
