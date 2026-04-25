@@ -45,6 +45,7 @@ services:
       INFLUXDB_ORG: f1chubby
       INFLUXDB_BUCKET: live_race
       GCS_CACHE_BUCKET: ${GCS_CACHE_BUCKET:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     volumes:
       - ./f1_cache:/app/f1_cache
     depends_on:

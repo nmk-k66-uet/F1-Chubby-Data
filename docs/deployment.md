@@ -93,7 +93,7 @@ terraform output
 | `vm_external_ip` | Dashboard URL, SSH access |
 | `wif_provider` | GitHub Actions secret `WIF_PROVIDER` |
 | `github_actions_sa_email` | GitHub Actions secret `WIF_SA_EMAIL` |
-| `gcs_cache_bucket` | Streamlit `GCS_BUCKET` env var |
+| `gcs_cache_bucket` | Streamlit `GCS_CACHE_BUCKET` env var |
 | `gcs_models_bucket` | Model API `GCS_BUCKET` env var |
 
 ---
@@ -219,7 +219,7 @@ Four GitHub Actions workflows automate the deployment lifecycle:
 - **Trigger:** Manual dispatch only (`workflow_dispatch`)
 - **Input:** Job type (`training`)
 - **What it does:** Uploads Spark files to GCS staging bucket, creates/reuses Dataproc cluster, submits PySpark job
-- **Cluster:** Single-node `e2-standard-4`, auto-deletes after 10 min idle
+- **Cluster:** 1 master + 2 workers (`e2-standard-4`), auto-deletes after 10 min idle
 
 ### terraform.yml — Infrastructure Changes
 
@@ -241,9 +241,8 @@ Four GitHub Actions workflows automate the deployment lifecycle:
 | `INFLUXDB_TOKEN` | `f1chubby-influx-token` | InfluxDB admin token |
 | `INFLUXDB_ORG` | `f1chubby` | InfluxDB organization |
 | `INFLUXDB_BUCKET` | `live_race` | InfluxDB bucket name |
-| `GCS_BUCKET` | `f1chubby-cache-<project_id>` | GCS cache bucket for FastF1 data |
-| `LOCAL_MODE` | `false` | `true` = skip InfluxDB/Model API, use FastF1 only |
-| `GEMINI_API_KEY` | *(user-provided)* | Google Gemini API key for tactical briefing |
+| `GCS_CACHE_BUCKET` | `f1chubby-cache-<project_id>` | GCS cache bucket for FastF1 data |
+| `GEMINI_API_KEY` | *(auto-provisioned via Terraform)* | Google Gemini API key for tactical briefing |
 
 ### Model API Container
 
@@ -280,7 +279,7 @@ Four GitHub Actions workflows automate the deployment lifecycle:
 | Resource | Strategy |
 |----------|----------|
 | **GCE VM** | Stop when idle: `./scripts/infra.sh stop` |
-| **Dataproc** | Created on-demand with `--max-idle 600s` (auto-deletes after 10 min) |
+| **Dataproc** | Created on-demand (1 master + 2 workers) with `--max-idle 600s` (auto-deletes after 10 min) |
 | **GCS** | Minimal cost; no lifecycle rules needed for current data volume |
 
 ---

@@ -68,7 +68,7 @@ terraform destroy
 |--------|-----------|
 | `networking` | VPC, subnet, firewall rules (SSH, app ports, internal) |
 | `pubsub` | 2 topics + 3 subscriptions (fast path × 2, slow path × 1) |
-| `storage` | 3 GCS buckets (raw, models, replay) |
+| `storage` | 3 GCS buckets (raw, models, cache) |
 
 | `compute` | GCE VM e2-medium with Container-Optimized OS |
 | `dataproc` | API enablement + staging bucket |

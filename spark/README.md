@@ -33,7 +33,7 @@ The easiest way is to trigger the `deploy-dataproc.yml` workflow:
 2. Select `training` as the job type
 3. The workflow will:
    - Upload `spark/*.py` and `core/` to GCS staging bucket
-   - Create or reuse a Dataproc cluster (single-node, `e2-standard-4`, auto-deletes after 10 min idle)
+   - Create or reuse a Dataproc cluster (1 master + 2 workers, `e2-standard-4`, auto-deletes after 10 min idle)
    - Submit the training pipeline as a PySpark job
 
 ### Run on Dataproc (manual)

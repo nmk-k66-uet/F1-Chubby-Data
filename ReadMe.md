@@ -97,7 +97,7 @@ Streamlit page request
   │   └─ core/data_loader.py  ──→  1. Check local f1_cache/
   │                                 2. Check GCS bucket
   │                                 3. Fall back to FastF1 API
-  │                                 4. Upload result to GCS for next time
+  │                                 4. Upload result to GCS async (background thread)
   │
   ├─ ML Prediction (pre-race or live)
   │   └─ HTTP POST → model-api:8080/predict-prerace or /predict-inrace
