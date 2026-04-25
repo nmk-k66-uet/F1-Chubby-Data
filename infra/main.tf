@@ -178,6 +178,7 @@ locals {
     "roles/storage.admin",
     "roles/pubsub.admin",
     "roles/compute.admin",
+    "roles/compute.osAdminLogin",
     "roles/dataproc.admin",
     "roles/run.admin",
     "roles/artifactregistry.admin",

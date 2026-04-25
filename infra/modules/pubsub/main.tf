@@ -8,13 +8,10 @@ resource "google_pubsub_topic" "topics" {
 }
 
 locals {
-  # Produce a flat map: { "f1-telemetry-viz-fast" = { topic = "f1-telemetry", suffix = "viz-fast" }, ... }
+  # Map each subscription name to its topic by stripping the last suffix
   subscriptions = {
-    for pair in setproduct(var.topic_names, var.subscription_suffixes) :
-    "${pair[0]}-${pair[1]}" => {
-      topic  = pair[0]
-      suffix = pair[1]
-    }
+    for name in var.subscription_names :
+    name => regex("^(f1-[a-z-]+?)-(viz-fast|pred-slow)$", name)[0]
   }
 }
 
@@ -23,7 +20,7 @@ resource "google_pubsub_subscription" "subs" {
 
   name    = each.key
   project = var.project_id
-  topic   = google_pubsub_topic.topics[each.value.topic].id
+  topic   = google_pubsub_topic.topics[each.value].id
 
   ack_deadline_seconds       = 20
   message_retention_duration = "86400s"

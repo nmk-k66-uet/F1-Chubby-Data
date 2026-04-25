@@ -79,7 +79,7 @@ terraform output
 | Module | Resources |
 |--------|-----------|
 | **networking** | VPC `f1-chubby-vpc`, subnet, firewall rules (SSH, ports 80/8080/8086, internal) |
-| **pubsub** | 2 topics (`f1-timing`, `f1-race-control`) × 2 subscriptions each (fast/slow) |
+| **pubsub** | 2 topics (`f1-timing`, `f1-race-control`), 3 subscriptions (`viz-fast` × 2, `pred-slow` × 1) |
 | **storage** | 3 GCS buckets: `f1chubby-raw-*`, `f1chubby-model-*`, `f1chubby-cache-*` |
 
 | **compute** | GCE VM `f1-chubby-vm` (e2-medium, Container-Optimized OS) + static IP + service account |
