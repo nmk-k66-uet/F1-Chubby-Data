@@ -48,17 +48,6 @@ output "github_actions_sa_email" {
   value = google_service_account.github_actions.email
 }
 
-# --- Workload Identity Federation (Terraform Cloud) ---
-output "tfc_wif_provider" {
-  description = "TFC Dynamic Provider Credentials: set as TFC_GCP_PROVIDER_AUTH value"
-  value       = google_iam_workload_identity_pool_provider.tfc.name
-}
-
-output "tfc_sa_email" {
-  description = "TFC Dynamic Provider Credentials: set as TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL value"
-  value       = google_service_account.tfc.email
-}
-
 # --- Gemini API Key ---
 output "gemini_api_key" {
   value     = google_apikeys_key.gemini.key_string

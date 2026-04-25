@@ -1,9 +1,7 @@
 terraform {
-  cloud {
-    organization = "duyle"
-    workspaces {
-      name = "f1-chubby-data"
-    }
+  backend "gcs" {
+    bucket = "f1chubby-tfstate-gen-lang-client-0314607994"
+    prefix = "terraform/state"
   }
 
   required_version = ">= 1.5"
@@ -17,8 +15,10 @@ terraform {
 }
 
 provider "google" {
-  project = var.project_id
-  region  = var.region
+  project               = var.project_id
+  region                = var.region
+  user_project_override = true
+  billing_project       = var.project_id
 }
 
 # --- Enable required APIs ---
@@ -151,7 +151,7 @@ resource "google_iam_workload_identity_pool_provider" "github" {
     "attribute.repository" = "assertion.repository"
   }
 
-  attribute_condition = "assertion.repository == 'nmk-k66-uet/F1-Chubby-Data'"
+  attribute_condition = "assertion.repository == '${var.github_repo}'"
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
@@ -169,7 +169,7 @@ resource "google_service_account" "github_actions" {
 resource "google_service_account_iam_member" "wif_binding" {
   service_account_id = google_service_account.github_actions.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/nmk-k66-uet/F1-Chubby-Data"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_repo}"
 }
 
 # Grant the service account necessary roles
@@ -185,6 +185,7 @@ locals {
     "roles/iam.serviceAccountAdmin",
     "roles/iam.workloadIdentityPoolAdmin",
     "roles/resourcemanager.projectIamAdmin",
+    "roles/serviceusage.serviceUsageAdmin",
     "roles/serviceusage.apiKeysAdmin",
   ]
 }
@@ -195,63 +196,6 @@ resource "google_project_iam_member" "github_actions_roles" {
   project = var.project_id
   role    = each.value
   member  = "serviceAccount:${google_service_account.github_actions.email}"
-}
-
-# --- Workload Identity Federation for Terraform Cloud ---
-
-resource "google_iam_workload_identity_pool" "tfc" {
-  project                   = var.project_id
-  workload_identity_pool_id = "terraform-cloud"
-  display_name              = "Terraform Cloud"
-
-  depends_on = [google_project_service.apis]
-}
-
-resource "google_iam_workload_identity_pool_provider" "tfc" {
-  project                            = var.project_id
-  workload_identity_pool_id          = google_iam_workload_identity_pool.tfc.workload_identity_pool_id
-  workload_identity_pool_provider_id = "tfc-oidc"
-  display_name                       = "Terraform Cloud OIDC"
-
-  attribute_mapping = {
-    "google.subject"                        = "assertion.sub"
-    "attribute.aud"                         = "assertion.aud"
-    "attribute.terraform_workspace_id"      = "assertion.terraform_workspace_id"
-    "attribute.terraform_workspace_name"    = "assertion.terraform_workspace_name"
-    "attribute.terraform_organization_id"   = "assertion.terraform_organization_id"
-    "attribute.terraform_organization_name" = "assertion.terraform_organization_name"
-    "attribute.terraform_run_phase"         = "assertion.terraform_run_phase"
-    "attribute.terraform_full_workspace"    = "assertion.terraform_full_workspace"
-  }
-
-  attribute_condition = "assertion.sub.startsWith(\"organization:duyle:project:\")"
-
-  oidc {
-    issuer_uri = "https://app.terraform.io"
-  }
-}
-
-# Service account for Terraform Cloud
-resource "google_service_account" "tfc" {
-  project      = var.project_id
-  account_id   = "terraform-cloud-sa"
-  display_name = "Terraform Cloud Service Account"
-}
-
-# Allow Terraform Cloud to impersonate the service account
-resource "google_service_account_iam_member" "tfc_wif_binding" {
-  service_account_id = google_service_account.tfc.name
-  role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.tfc.name}/*"
-}
-
-# Grant TFC service account the same roles
-resource "google_project_iam_member" "tfc_roles" {
-  for_each = toset(local.sa_roles)
-
-  project = var.project_id
-  role    = each.value
-  member  = "serviceAccount:${google_service_account.tfc.email}"
 }
 
 # --- VM Service Account: GCS access ---

@@ -29,22 +29,16 @@ variable "network_name" {
   default     = "f1-chubby-vpc"
 }
 
+# ---------- GitHub ----------
+variable "github_repo" {
+  description = "GitHub repository (owner/repo) for Workload Identity Federation"
+  type        = string
+  default     = "nmk-k66-uet/F1-Chubby-Data"
+}
+
 # ---------- Compute ----------
 variable "vm_machine_type" {
   description = "GCE VM machine type"
   type        = string
   default     = "e2-medium"
-}
-
-# ---------- TFC Dynamic Provider Credentials ----------
-variable "TFC_GCP_PROVIDER_AUTH" {
-  description = "TFC dynamic credential: enable GCP provider auth"
-  type        = string
-  default     = ""
-}
-
-variable "TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL" {
-  description = "TFC dynamic credential: GCP service account email"
-  type        = string
-  default     = ""
 }

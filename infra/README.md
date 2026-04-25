@@ -6,17 +6,44 @@ Terraform configuration for all GCP resources.
 
 - [Terraform >= 1.5](https://developer.hashicorp.com/terraform/install)
 - GCP project with billing enabled
-- [Terraform Cloud](https://app.terraform.io) account (free tier)
+- A GCS bucket for Terraform state (created once, before first `terraform init`)
+
+## Bootstrap
+
+On a fresh GCP project, enable the minimum APIs that Terraform and the GCS backend need:
+
+```bash
+gcloud services enable \
+  cloudresourcemanager.googleapis.com \
+  storage.googleapis.com \
+  --project=gen-lang-client-0314607994
+```
+
+Then create the state bucket:
+
+```bash
+gcloud storage buckets create gs://f1chubby-tfstate-gen-lang-client-0314607994 \
+  --location=asia-southeast1 \
+  --uniform-bucket-level-access \
+  --public-access-prevention
+
+# Enable versioning to protect state history
+gcloud storage buckets update gs://f1chubby-tfstate-gen-lang-client-0314607994 \
+  --versioning
+```
 
 ## Quick Start
 
 ```bash
 cd infra/
 
-# First time: login to Terraform Cloud
-terraform login
+# Authenticate to GCP
+gcloud auth application-default login
 
-# Initialize (downloads providers, connects to TFC backend)
+# Set quota project (required by apikeys.googleapis.com)
+gcloud auth application-default set-quota-project <YOUR_PROJECT_ID>
+
+# Initialize (downloads providers, connects to GCS backend)
 terraform init
 
 # Review planned changes
