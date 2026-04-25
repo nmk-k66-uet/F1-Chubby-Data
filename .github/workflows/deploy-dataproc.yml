@@ -64,7 +64,8 @@ jobs:
             --bucket ${{ env.STAGING_BUCKET }} \
             --subnet projects/${{ env.PROJECT_ID }}/regions/${{ env.REGION }}/subnetworks/f1-chubby-vpc-subnet \
             --no-address \
-            --service-account f1-dataproc-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com
+            --service-account f1-dataproc-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com \
+            --pip-packages 'influxdb-client,requests'
 
       - name: Submit ETL Job
         if: inputs.job_type == 'etl' || inputs.job_type == 'all'
@@ -94,7 +95,6 @@ jobs:
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
             --properties spark.jars.packages=com.google.cloud:pubsub-spark-connector:1.0.0 \
-            --pip-packages 'influxdb-client' \
             --async \
             -- \
             --project ${{ env.PROJECT_ID }} \
@@ -111,7 +111,6 @@ jobs:
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
             --properties spark.jars.packages=com.google.cloud:pubsub-spark-connector:1.0.0 \
-            --pip-packages 'influxdb-client,requests' \
             --async \
             -- \
             --project ${{ env.PROJECT_ID }} \
