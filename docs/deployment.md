@@ -82,7 +82,7 @@ terraform output
 | **pubsub** | 2 topics (`f1-timing`, `f1-race-control`), 3 subscriptions (`viz-fast` × 2, `pred-slow` × 1) |
 | **storage** | 3 GCS buckets: `f1chubby-raw-*`, `f1chubby-model-*`, `f1chubby-cache-*` |
 
-| **compute** | GCE VM `f1-chubby-vm` (e2-medium, Container-Optimized OS) + static IP + service account |
+| **compute** | GCE VM `f1-chubby-vm` (e2-medium, Container-Optimized OS) + static IP + service account (GCS admin, Pub/Sub subscriber) |
 | **dataproc** | API enablement + staging bucket (clusters created on-demand) |
 | **cloudrun** | API enablement + Artifact Registry repo (future use) |
 

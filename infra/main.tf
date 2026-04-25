@@ -213,6 +213,14 @@ resource "google_storage_bucket_iam_member" "vm_bucket_access" {
   member = "serviceAccount:${module.compute.vm_service_account_email}"
 }
 
+# --- VM Service Account: Pub/Sub subscriber access ---
+
+resource "google_project_iam_member" "vm_pubsub_subscriber" {
+  project = var.project_id
+  role    = "roles/pubsub.subscriber"
+  member  = "serviceAccount:${module.compute.vm_service_account_email}"
+}
+
 # --- Gemini API Key (restricted to Generative Language API) ---
 
 resource "google_apikeys_key" "gemini" {
