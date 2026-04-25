@@ -14,6 +14,7 @@ on:
       - 'assets/**'
       - '.streamlit/**'
       - 'model_serving/**'
+      - 'streaming/**'
       - 'sql/**'
       - 'simulation_service.py'
       - 'schemas/**'
@@ -48,7 +49,7 @@ jobs:
         run: |
           # Copy core app files
           gcloud compute scp --recurse \
-            main.py Dockerfile docker-compose.yml requirements-streamlit.txt \
+            main.py Dockerfile docker-compose.yml requirements-streamlit.txt streaming \
             .streamlit core components pages assets model_serving sql \
             ${{ env.VM_NAME }}:~/app/ \
             --zone ${{ env.ZONE }} \

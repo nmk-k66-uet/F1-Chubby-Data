@@ -10,8 +10,6 @@ on:
         options:
           - etl
           - training
-          - streaming-fast
-          - streaming-slow
           - all
 
 permissions:
@@ -73,7 +71,7 @@ jobs:
               --master-boot-disk-size 50GB \
               --image-version 2.1-debian11 \
               --initialization-actions gs://goog-dataproc-initialization-actions-${{ env.REGION }}/python/pip-install.sh \
-              --metadata 'PIP_PACKAGES=fastf1 psycopg2-binary numpy<2 influxdb-client requests google-cloud-pubsub' \
+              --metadata 'PIP_PACKAGES=fastf1 psycopg2-binary numpy<2 influxdb-client requests' \
               --max-idle 600s \
               --project ${{ env.PROJECT_ID }} \
               --bucket ${{ env.STAGING_BUCKET }} \
@@ -102,31 +100,4 @@ jobs:
             --project ${{ env.PROJECT_ID }} \
             --py-files gs://${{ env.STAGING_BUCKET }}/spark/core_dependencies.zip
 
-      - name: Submit Streaming Fast Path
-        if: inputs.job_type == 'streaming-fast' || inputs.job_type == 'all'
-        run: |
-          gcloud dataproc jobs submit pyspark \
-            gs://${{ env.STAGING_BUCKET }}/spark/streaming_fast.py \
-            --cluster ${{ env.CLUSTER_NAME }} \
-            --region ${{ env.REGION }} \
-            --project ${{ env.PROJECT_ID }} \
-            --async \
-            -- \
-            --project ${{ env.PROJECT_ID }} \
-            --influxdb-url http://${{ secrets.VM_INTERNAL_IP }}:8086 \
-            --influxdb-token ${{ secrets.INFLUXDB_TOKEN }}
 
-      - name: Submit Streaming Slow Path
-        if: inputs.job_type == 'streaming-slow' || inputs.job_type == 'all'
-        run: |
-          gcloud dataproc jobs submit pyspark \
-            gs://${{ env.STAGING_BUCKET }}/spark/streaming_slow.py \
-            --cluster ${{ env.CLUSTER_NAME }} \
-            --region ${{ env.REGION }} \
-            --project ${{ env.PROJECT_ID }} \
-            --async \
-            -- \
-            --project ${{ env.PROJECT_ID }} \
-            --influxdb-url http://${{ secrets.VM_INTERNAL_IP }}:8086 \
-            --influxdb-token ${{ secrets.INFLUXDB_TOKEN }} \
-            --model-api-url http://${{ secrets.VM_INTERNAL_IP }}:8080
