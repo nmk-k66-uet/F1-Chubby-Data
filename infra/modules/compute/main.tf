@@ -53,6 +53,10 @@ resource "google_compute_instance" "f1_vm" {
         GEMINI_API_KEY=${var.gemini_api_key}
         GCS_CACHE_BUCKET=${var.gcs_cache_bucket}
         GCS_MODELS_BUCKET=${var.gcs_models_bucket}
+        GCP_PROJECT_ID=${var.project_id}
+        TIMING_VIZ_SUB=${var.timing_viz_sub}
+        TIMING_PRED_SUB=${var.timing_pred_sub}
+        RC_VIZ_SUB=${var.rc_viz_sub}
         DOTENV
         chmod 644 /opt/f1chubby/.env
       - echo "F1 Chubby VM ready. Docker installed via get-docker.sh."

@@ -182,11 +182,7 @@ gcloud compute ssh f1-chubby-vm --zone asia-southeast1-b -- \
    ./scripts/infra.sh start
    ```
 
-2. **Start streaming consumers** (if not already in docker-compose.yml):
-   ```bash
-   gcloud compute ssh f1-chubby-vm --zone asia-southeast1-b -- \
-     "cd ~/app && sudo docker compose up -d streaming-fast streaming-slow"
-   ```
+2. **Streaming consumers start automatically** with docker-compose (no manual step needed).
 
 3. **Run race simulation** (from your local machine or the VM):
    ```bash
@@ -265,12 +261,17 @@ Four GitHub Actions workflows automate the deployment lifecycle:
 
 ### Streaming Consumers
 
+Both `streaming-fast` and `streaming-slow` are defined in `docker-compose.yml` and start automatically with the rest of the stack. They accept configuration via CLI args passed in the `command` field:
+
 | Variable | Value | Description |
 |----------|-------|-------------|
-| `--project` | `gen-lang-client-0314607994` | GCP project ID (CLI arg) |
-| `--influxdb-url` | `http://influxdb:8086` | InfluxDB URL (CLI arg) |
-| `--influxdb-token` | *(from .env)* | InfluxDB token (CLI arg) |
-| `--model-api-url` | `http://model-api:8080` | Model API URL (slow path only, CLI arg) |
+| `--project` | `${GCP_PROJECT_ID}` from `.env` | GCP project ID |
+| `--influxdb-url` | `http://influxdb:8086` | InfluxDB internal URL |
+| `--influxdb-token` | `${INFLUXDB_TOKEN}` from `.env` | InfluxDB token |
+| `--timing-sub` | `${TIMING_VIZ_SUB}` / `${TIMING_PRED_SUB}` from `.env` | Pub/Sub subscription name (set by Terraform via cloud-init) |
+| `--rc-sub` | `${RC_VIZ_SUB}` from `.env` | Race-control subscription (fast path only) |
+| `--model-api-url` | `http://model-api:8080` | Model API URL (slow path only) |
+| `--duration` | `0` | Run indefinitely |
 
 ---
 

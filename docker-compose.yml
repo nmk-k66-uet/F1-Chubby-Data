@@ -53,6 +53,39 @@ services:
       - influxdb
     restart: unless-stopped
 
+  streaming-fast:
+    build: ./streaming
+    container_name: f1-streaming-fast
+    command:
+      - python
+      - streaming_fast.py
+      - --project=${GCP_PROJECT_ID:-gen-lang-client-0314607994}
+      - --influxdb-url=http://influxdb:8086
+      - --influxdb-token=${INFLUXDB_TOKEN:-f1chubby-influx-token}
+      - --timing-sub=${TIMING_VIZ_SUB:-f1-timing-viz-fast}
+      - --rc-sub=${RC_VIZ_SUB:-f1-race-control-viz-fast}
+      - --duration=0
+    depends_on:
+      - influxdb
+    restart: unless-stopped
+
+  streaming-slow:
+    build: ./streaming
+    container_name: f1-streaming-slow
+    command:
+      - python
+      - streaming_slow.py
+      - --project=${GCP_PROJECT_ID:-gen-lang-client-0314607994}
+      - --influxdb-url=http://influxdb:8086
+      - --influxdb-token=${INFLUXDB_TOKEN:-f1chubby-influx-token}
+      - --model-api-url=http://model-api:8080
+      - --timing-sub=${TIMING_PRED_SUB:-f1-timing-pred-slow}
+      - --duration=0
+    depends_on:
+      - influxdb
+      - model-api
+    restart: unless-stopped
+
 volumes:
   influxdb-data:
   model-cache:

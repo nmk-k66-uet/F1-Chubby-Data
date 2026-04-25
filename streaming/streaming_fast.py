@@ -130,6 +130,10 @@ def parse_args():
     p.add_argument("--influxdb-token", required=True)
     p.add_argument("--influxdb-org", default="f1chubby")
     p.add_argument("--influxdb-bucket", default="live_race")
+    p.add_argument("--timing-sub", default="f1-timing-viz-fast",
+                   help="Pub/Sub subscription name for timing messages")
+    p.add_argument("--rc-sub", default="f1-race-control-viz-fast",
+                   help="Pub/Sub subscription name for race-control messages")
     p.add_argument("--duration", type=int, default=1800,
                    help="Max run time in seconds (default: 1800 = 30 min). 0 = unlimited.")
     return p.parse_args()
@@ -139,8 +143,8 @@ def main():
     args = parse_args()
 
     subscriber = pubsub_v1.SubscriberClient()
-    timing_sub = subscriber.subscription_path(args.project, "f1-timing-viz-fast")
-    rc_sub = subscriber.subscription_path(args.project, "f1-race-control-viz-fast")
+    timing_sub = subscriber.subscription_path(args.project, args.timing_sub)
+    rc_sub = subscriber.subscription_path(args.project, args.rc_sub)
 
     deadline = time.monotonic() + args.duration if args.duration > 0 else float("inf")
     log.info("Fast streaming started — pulling timing + race-control → InfluxDB (duration=%ss)", args.duration)

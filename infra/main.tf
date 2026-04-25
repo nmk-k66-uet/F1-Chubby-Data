@@ -81,6 +81,9 @@ module "compute" {
   gemini_api_key    = google_apikeys_key.gemini.key_string
   gcs_cache_bucket  = "f1chubby-cache-${var.project_id}"
   gcs_models_bucket = "f1chubby-model-${var.project_id}"
+  timing_viz_sub    = module.pubsub.subscription_names_map["f1-timing-viz-fast"]
+  timing_pred_sub   = module.pubsub.subscription_names_map["f1-timing-pred-slow"]
+  rc_viz_sub        = module.pubsub.subscription_names_map["f1-race-control-viz-fast"]
 
   depends_on = [google_project_service.apis]
 }

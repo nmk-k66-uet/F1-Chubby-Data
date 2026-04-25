@@ -135,7 +135,7 @@ Predictions are normalized so total win expectation = 1.0 and total podium expec
 F1-Chubby-Data/
 ├── main.py                      # Streamlit entry point
 ├── Dockerfile                   # Streamlit container image
-├── docker-compose.yml           # Production stack (3 services)
+├── docker-compose.yml           # Production stack (5 services)
 ├── docker-compose.dev.yml       # Dev stack (3 services, hot reload)
 ├── requirements-streamlit.txt   # Streamlit dependencies
 ├── .env.example                 # Production env var template

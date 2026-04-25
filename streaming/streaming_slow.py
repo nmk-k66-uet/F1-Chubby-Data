@@ -106,6 +106,8 @@ def parse_args():
     p.add_argument("--influxdb-org", default="f1chubby")
     p.add_argument("--influxdb-bucket", default="live_race")
     p.add_argument("--model-api-url", required=True, help="e.g. http://10.0.0.2:8080")
+    p.add_argument("--timing-sub", default="f1-timing-pred-slow",
+                   help="Pub/Sub subscription name for timing messages")
     p.add_argument("--duration", type=int, default=1800,
                    help="Max run time in seconds (default: 1800 = 30 min). 0 = unlimited.")
     return p.parse_args()
@@ -115,7 +117,7 @@ def main():
     args = parse_args()
 
     subscriber = pubsub_v1.SubscriberClient()
-    timing_sub = subscriber.subscription_path(args.project, "f1-timing-pred-slow")
+    timing_sub = subscriber.subscription_path(args.project, args.timing_sub)
 
     deadline = time.monotonic() + args.duration if args.duration > 0 else float("inf")
     log.info("Slow streaming started — pulling %s → Model API → InfluxDB (duration=%ss)", timing_sub, args.duration)

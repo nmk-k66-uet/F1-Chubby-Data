@@ -88,15 +88,22 @@ python streaming/streaming_slow.py \
 | `--influxdb-token` | Yes | — | InfluxDB admin token |
 | `--influxdb-org` | No | `f1chubby` | InfluxDB organization |
 | `--influxdb-bucket` | No | `live_race` | InfluxDB bucket |
+| `--timing-sub` | No | `f1-timing-viz-fast` | Pub/Sub subscription for timing messages |
+| `--rc-sub` | No | `f1-race-control-viz-fast` | Pub/Sub subscription for race-control messages |
 | `--duration` | No | `1800` | Max run time in seconds (0 = unlimited) |
 
 ### streaming_slow.py
 
-Same as fast path, plus:
-
 | Argument | Required | Default | Description |
 |----------|----------|---------|-------------|
+| `--project` | Yes | — | GCP project ID |
+| `--influxdb-url` | Yes | — | InfluxDB URL |
+| `--influxdb-token` | Yes | — | InfluxDB admin token |
+| `--influxdb-org` | No | `f1chubby` | InfluxDB organization |
+| `--influxdb-bucket` | No | `live_race` | InfluxDB bucket |
 | `--model-api-url` | Yes | — | Model API base URL |
+| `--timing-sub` | No | `f1-timing-pred-slow` | Pub/Sub subscription for timing messages |
+| `--duration` | No | `1800` | Max run time in seconds (0 = unlimited) |
 
 ## InfluxDB Measurements
 
