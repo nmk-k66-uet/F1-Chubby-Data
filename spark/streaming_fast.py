@@ -1,15 +1,13 @@
 """
-Fast-path Structured Streaming job: Pub/Sub *-viz-fast → InfluxDB.
+Fast-path streaming job: Pub/Sub pull → InfluxDB.
 
-Reads from three subscriptions (telemetry-viz-fast, timing-viz-fast,
-race-control-viz-fast), maps each JSON payload to InfluxDB line protocol,
-and writes via the InfluxDB v2 write API in micro-batches (500 ms trigger).
+Pulls from timing-viz-fast and race-control-viz-fast subscriptions using the
+Python Pub/Sub client, converts to InfluxDB line protocol, and writes in
+micro-batches (~500 ms).
 
 Submit to Dataproc:
     gcloud dataproc jobs submit pyspark spark/streaming_fast.py \
         --cluster $CLUSTER --region $REGION \
-        --properties spark.jars.packages=com.google.cloud:pubsub-spark-connector:1.0.0 \
-        --pip-packages 'influxdb-client' \
         -- --project $PROJECT_ID --influxdb-url http://$VM_IP:8086 \
            --influxdb-token $TOKEN
 """
@@ -17,244 +15,159 @@ Submit to Dataproc:
 import argparse
 import json
 import logging
-from datetime import datetime, timezone
+import time
 
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, udf
-from pyspark.sql.types import (
-    BooleanType,
-    DoubleType,
-    IntegerType,
-    StringType,
-    StructField,
-    StructType,
-)
+from google.cloud import pubsub_v1
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("streaming_fast")
 
-# ── Pub/Sub JSON schemas ────────────────────────────────────────────────────
-
-TIMING_SCHEMA = StructType([
-    StructField("race_id", StringType()),
-    StructField("total_laps", IntegerType()),
-    StructField("timestamp_ms", IntegerType()),
-    StructField("driver_id", StringType()),
-    StructField("lap_number", IntegerType()),
-    StructField("position", IntegerType()),
-    StructField("lap_time_ms", DoubleType()),
-    StructField("gap_to_leader_ms", DoubleType()),
-    StructField("interval_ms", DoubleType()),
-    StructField("tyre_compound", StringType()),
-    StructField("tyre_age_laps", IntegerType()),
-    StructField("stint_number", IntegerType()),
-    StructField("pit_in_lap", BooleanType()),
-    StructField("pit_out_lap", BooleanType()),
-])
-
-TELEMETRY_SCHEMA = StructType([
-    StructField("timestamp_ms", IntegerType()),
-    StructField("driver_id", StringType()),
-    StructField("x", DoubleType()),
-    StructField("y", DoubleType()),
-    StructField("speed_kph", DoubleType()),
-    StructField("throttle_pct", DoubleType()),
-    StructField("brake_pct", DoubleType()),
-    StructField("gear", IntegerType()),
-    StructField("drs", IntegerType()),
-    StructField("lap_number", IntegerType()),
-    StructField("session_time_sec", DoubleType()),
-])
-
-RACE_CONTROL_SCHEMA = StructType([
-    StructField("race_id", StringType()),
-    StructField("timestamp_ms", IntegerType()),
-    StructField("flag", StringType()),
-    StructField("scope", StringType()),
-    StructField("message", StringType()),
-    StructField("driver_id", StringType()),
-    StructField("lap_number", IntegerType()),
-])
-
-# ── Compound mapping (mirrors simulation script) ────────────────────────────
-
 COMPOUND_IDX = {"SOFT": 0, "MEDIUM": 1, "HARD": 2, "INTERMEDIATE": 3, "WET": 4}
 
 
-# ── InfluxDB batch writer (runs inside foreachBatch) ───────────────────────
-
-def make_influx_writer(url: str, token: str, org: str, bucket: str):
-    """Return a foreachBatch callable that writes to InfluxDB."""
-
-    def _write_batch(df, batch_id):
-        rows = df.collect()
-        if not rows:
-            return
-
-        from influxdb_client import InfluxDBClient, WritePrecision
-        from influxdb_client.client.write_api import SYNCHRONOUS
-
-        client = InfluxDBClient(url=url, token=token, org=org)
-        write_api = client.write_api(write_options=SYNCHRONOUS)
-        try:
-            lines = [row["line_protocol"] for row in rows if row["line_protocol"]]
-            if lines:
-                write_api.write(bucket=bucket, record=lines,
-                                write_precision=WritePrecision.MS)
-                log.info("batch %s: wrote %d points", batch_id, len(lines))
-        finally:
-            write_api.close()
-            client.close()
-
-    return _write_batch
-
-
-# ── Line-protocol formatters (UDFs) ────────────────────────────────────────
+# ── Line-protocol helpers ──────────────────────────────────────────────────
 
 def _escape_tag(v: str) -> str:
     return v.replace(" ", "\\ ").replace(",", "\\,").replace("=", "\\=")
 
 
-def timing_to_line():
-    """Return a UDF that converts a timing row to InfluxDB line protocol."""
+def timing_to_line(msg):
+    """Convert a timing message dict to InfluxDB line protocol string."""
+    driver_id = msg.get("driver_id")
+    race_id = msg.get("race_id")
+    if not driver_id or not race_id:
+        return None
 
-    def _fn(race_id, driver_id, lap_number, position, lap_time_ms, gap_to_leader_ms,
-            interval_ms, tyre_compound, tyre_age_laps, pit_out_lap, timestamp_ms):
-        if driver_id is None or race_id is None:
-            return None
-        _race_id = _escape_tag(race_id)
-        driver = _escape_tag(driver_id)
-        compound = tyre_compound or "MEDIUM"
-        cidx = COMPOUND_IDX.get(compound, 1)
-        is_pit_out = 1 if pit_out_lap else 0
-        lap_frac = 0.0  # Will be enriched by slow path
-        fields = (
-            f"position={position or 0}i,"
-            f"gap_to_leader={gap_to_leader_ms or 0.0},"
-            f"interval={interval_ms or 0.0},"
-            f"lap_time_ms={int(lap_time_ms or 0)}i,"
-            f'compound="{compound}",'
-            f"tyre_life={tyre_age_laps or 0}i,"
-            f"compound_idx={cidx}i,"
-            f"is_pit_out={is_pit_out}i,"
-            f"lap_number={lap_number or 0}i,"
-            f"lap_fraction={lap_frac}"
+    _race_id = _escape_tag(race_id)
+    driver = _escape_tag(driver_id)
+    compound = msg.get("tyre_compound") or "MEDIUM"
+    cidx = COMPOUND_IDX.get(compound, 1)
+    is_pit_out = 1 if msg.get("pit_out_lap") else 0
+    timestamp_ms = msg.get("timestamp_ms", 0)
+
+    fields = (
+        f"position={msg.get('position', 0) or 0}i,"
+        f"gap_to_leader={msg.get('gap_to_leader_ms', 0.0) or 0.0},"
+        f"interval={msg.get('interval_ms', 0.0) or 0.0},"
+        f"lap_time_ms={int(msg.get('lap_time_ms', 0) or 0)}i,"
+        f'compound="{compound}",'
+        f"tyre_life={msg.get('tyre_age_laps', 0) or 0}i,"
+        f"compound_idx={cidx}i,"
+        f"is_pit_out={is_pit_out}i,"
+        f"lap_number={msg.get('lap_number', 0) or 0}i,"
+        f"lap_fraction=0.0"
+    )
+    return f"live_timing,race_id={_race_id},driver={driver} {fields} {timestamp_ms}"
+
+
+def race_control_to_line(msg):
+    """Convert a race-control message dict to InfluxDB line protocol string."""
+    message = msg.get("message")
+    race_id = msg.get("race_id")
+    if not message or not race_id:
+        return None
+
+    _race_id = _escape_tag(race_id)
+    _flag = (msg.get("flag") or "").replace('"', '\\"')
+    _msg = message.replace('"', '\\"')
+    timestamp_ms = msg.get("timestamp_ms", 0)
+
+    fields = f'message="{_msg}",flag="{_flag}",elapsed_sec=0.0'
+    return f"live_race_control,race_id={_race_id},category=RaceControl {fields} {timestamp_ms}"
+
+
+# ── InfluxDB writer ────────────────────────────────────────────────────────
+
+def write_to_influx(lines, url, token, org, bucket):
+    """Write line protocol strings to InfluxDB."""
+    if not lines:
+        return
+    from influxdb_client import InfluxDBClient, WritePrecision
+    from influxdb_client.client.write_api import SYNCHRONOUS
+
+    client = InfluxDBClient(url=url, token=token, org=org)
+    write_api = client.write_api(write_options=SYNCHRONOUS)
+    try:
+        write_api.write(bucket=bucket, record=lines, write_precision=WritePrecision.MS)
+        log.info("Wrote %d points to InfluxDB", len(lines))
+    finally:
+        write_api.close()
+        client.close()
+
+
+# ── Pull helpers ───────────────────────────────────────────────────────────
+
+def pull_and_convert(subscriber, subscription, converter, max_messages=100):
+    """Pull messages, convert each with `converter`, return (lines, ack_ids)."""
+    lines = []
+    ack_ids = []
+    try:
+        response = subscriber.pull(
+            request={"subscription": subscription, "max_messages": max_messages},
+            timeout=5,
         )
-        return f"live_timing,race_id={_race_id},driver={driver} {fields} {timestamp_ms}"
-
-    return udf(_fn, StringType())
-
-
-def race_control_to_line():
-    """Return a UDF that converts a race-control row to line protocol."""
-
-    def _fn(race_id, flag, message, timestamp_ms):
-        if message is None or race_id is None:
-            return None
-        _race_id = _escape_tag(race_id)
-        category = "RaceControl"
-        _flag = (flag or "").replace('"', '\\"')
-        _msg = (message or "").replace('"', '\\"')
-        fields = f'message="{_msg}",flag="{_flag}",elapsed_sec=0.0'
-        return f"live_race_control,race_id={_race_id},category={_escape_tag(category)} {fields} {timestamp_ms}"
-
-    return udf(_fn, StringType())
+        for msg in response.received_messages:
+            ack_ids.append(msg.ack_id)
+            try:
+                data = json.loads(msg.message.data.decode("utf-8"))
+                line = converter(data)
+                if line:
+                    lines.append(line)
+            except Exception as e:
+                log.warning("Failed to parse message: %s", e)
+    except Exception as e:
+        if "DEADLINE_EXCEEDED" not in str(e) and "504" not in str(e):
+            log.warning("Pull error on %s: %s", subscription, e)
+    return lines, ack_ids
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Fast streaming: Pub/Sub → InfluxDB")
+    p = argparse.ArgumentParser(description="Fast streaming: Pub/Sub pull → InfluxDB")
     p.add_argument("--project", required=True, help="GCP project ID")
     p.add_argument("--influxdb-url", required=True)
     p.add_argument("--influxdb-token", required=True)
     p.add_argument("--influxdb-org", default="f1chubby")
     p.add_argument("--influxdb-bucket", default="live_race")
-    p.add_argument("--checkpoint-dir", default="/tmp/spark-checkpoints/fast")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
 
-    spark = (
-        SparkSession.builder
-        .appName("f1-streaming-fast")
-        .getOrCreate()
-    )
-    spark.sparkContext.setLogLevel("WARN")
+    subscriber = pubsub_v1.SubscriberClient()
+    timing_sub = subscriber.subscription_path(args.project, "f1-timing-viz-fast")
+    rc_sub = subscriber.subscription_path(args.project, "f1-race-control-viz-fast")
 
-    influx_writer = make_influx_writer(
-        args.influxdb_url, args.influxdb_token, args.influxdb_org, args.influxdb_bucket
-    )
+    log.info("Fast streaming started — pulling timing + race-control → InfluxDB")
 
-    # ── 1. Timing stream ────────────────────────────────────────────────────
-    timing_raw = (
-        spark.readStream
-        .format("pubsub")
-        .option("subscriptionPath",
-                f"projects/{args.project}/subscriptions/f1-timing-viz-fast")
-        .load()
-    )
+    while True:
+        lines = []
 
-    timing_parsed = (
-        timing_raw
-        .selectExpr("CAST(data AS STRING) AS json_str")
-        .select(from_json(col("json_str"), TIMING_SCHEMA).alias("d"))
-        .select("d.*")
-    )
+        # Pull timing messages
+        t_lines, t_acks = pull_and_convert(subscriber, timing_sub, timing_to_line)
+        lines.extend(t_lines)
+        if t_acks:
+            subscriber.acknowledge(request={"subscription": timing_sub, "ack_ids": t_acks})
 
-    timing_line_udf = timing_to_line()
-    timing_lines = timing_parsed.select(
-        timing_line_udf(
-            col("race_id"), col("driver_id"), col("lap_number"), col("position"),
-            col("lap_time_ms"), col("gap_to_leader_ms"), col("interval_ms"),
-            col("tyre_compound"), col("tyre_age_laps"), col("pit_out_lap"),
-            col("timestamp_ms"),
-        ).alias("line_protocol")
-    )
+        # Pull race-control messages
+        rc_lines, rc_acks = pull_and_convert(subscriber, rc_sub, race_control_to_line, max_messages=50)
+        lines.extend(rc_lines)
+        if rc_acks:
+            subscriber.acknowledge(request={"subscription": rc_sub, "ack_ids": rc_acks})
 
-    timing_query = (
-        timing_lines.writeStream
-        .foreachBatch(influx_writer)
-        .option("checkpointLocation", f"{args.checkpoint_dir}/timing")
-        .trigger(processingTime="500 milliseconds")
-        .start()
-    )
+        # Write batch to InfluxDB
+        if lines:
+            try:
+                write_to_influx(
+                    lines, args.influxdb_url, args.influxdb_token,
+                    args.influxdb_org, args.influxdb_bucket,
+                )
+            except Exception as e:
+                log.error("InfluxDB write error: %s", e)
 
-    # ── 2. Race-control stream ──────────────────────────────────────────────
-    rc_raw = (
-        spark.readStream
-        .format("pubsub")
-        .option("subscriptionPath",
-                f"projects/{args.project}/subscriptions/f1-race-control-viz-fast")
-        .load()
-    )
-
-    rc_parsed = (
-        rc_raw
-        .selectExpr("CAST(data AS STRING) AS json_str")
-        .select(from_json(col("json_str"), RACE_CONTROL_SCHEMA).alias("d"))
-        .select("d.*")
-    )
-
-    rc_line_udf = race_control_to_line()
-    rc_lines = rc_parsed.select(
-        rc_line_udf(
-            col("race_id"), col("flag"), col("message"), col("timestamp_ms"),
-        ).alias("line_protocol")
-    )
-
-    rc_query = (
-        rc_lines.writeStream
-        .foreachBatch(influx_writer)
-        .option("checkpointLocation", f"{args.checkpoint_dir}/race_control")
-        .trigger(processingTime="500 milliseconds")
-        .start()
-    )
-
-    log.info("Fast streaming started — timing + race-control → InfluxDB")
-    spark.streams.awaitAnyTermination()
+        time.sleep(0.5)
 
 
 if __name__ == "__main__":

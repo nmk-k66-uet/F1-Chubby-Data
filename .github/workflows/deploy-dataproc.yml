@@ -73,7 +73,7 @@ jobs:
               --master-boot-disk-size 50GB \
               --image-version 2.1-debian11 \
               --initialization-actions gs://goog-dataproc-initialization-actions-${{ env.REGION }}/python/pip-install.sh \
-              --metadata 'PIP_PACKAGES=fastf1 psycopg2-binary numpy<2 influxdb-client requests' \
+              --metadata 'PIP_PACKAGES=fastf1 psycopg2-binary numpy<2 influxdb-client requests google-cloud-pubsub' \
               --max-idle 600s \
               --project ${{ env.PROJECT_ID }} \
               --bucket ${{ env.STAGING_BUCKET }} \
@@ -110,7 +110,6 @@ jobs:
             --cluster ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
-            --properties spark.jars.packages=com.google.cloud:pubsub-spark-connector:1.0.0 \
             --async \
             -- \
             --project ${{ env.PROJECT_ID }} \
@@ -125,7 +124,6 @@ jobs:
             --cluster ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
-            --properties spark.jars.packages=com.google.cloud:pubsub-spark-connector:1.0.0 \
             --async \
             -- \
             --project ${{ env.PROJECT_ID }} \
