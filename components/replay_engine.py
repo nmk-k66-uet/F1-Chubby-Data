@@ -75,7 +75,9 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path, blob):
         # Track Geometry
         ref_lap = session.laps.pick_fastest()
         ref_tel = ref_lap.get_telemetry()
-        payload["track_path"] = ref_tel[['X', 'Y']].dropna().values.tolist()
+        full_track = ref_tel[['X', 'Y']].dropna().values.tolist()
+        # Downsample track path — keep every 4th point (still smooth enough for rendering)
+        payload["track_path"] = full_track[::4]
         payload["min_x"], payload["max_x"] = float(ref_tel['X'].min()), float(ref_tel['X'].max())
         payload["min_y"], payload["max_y"] = float(ref_tel['Y'].min()), float(ref_tel['Y'].max())
         
@@ -102,7 +104,7 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path, blob):
         if circuit_info is not None and hasattr(circuit_info, 'corners'):
             center_x = (payload["min_x"] + payload["max_x"]) / 2
             center_y = (payload["min_y"] + payload["max_y"]) / 2
-            track_pts = payload["track_path"]  # list of [x, y]
+            track_pts = full_track  # use full-resolution track for accurate nearest-point lookup
             
             for _, row in circuit_info.corners.iterrows():
                 cx = float(row['X']); cy = float(row['Y'])
@@ -195,7 +197,7 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path, blob):
 
     min_time = session.laps['LapStartTime'].dropna().min()
     max_time = session.laps['Time'].dropna().max()
-    timestamps = pd.timedelta_range(start=min_time, end=max_time, freq='100ms')
+    timestamps = pd.timedelta_range(start=min_time, end=max_time, freq='500ms')
     
     df_list = []
     for i, drv in enumerate(drivers):
@@ -212,23 +214,26 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path, blob):
                     tel_synced = tel[[time_col, 'X', 'Y']].copy()
                     tel_synced.set_index(time_col, inplace=True)
                     tel_synced = tel_synced[~tel_synced.index.duplicated(keep='first')]
-                    tel_synced = tel_synced.reindex(timestamps, method='nearest').reset_index()
-                    tel_synced.rename(columns={'index': 'SessionTime'}, inplace=True)
-                    tel_synced['Driver'] = drv
-                    df_list.append(tel_synced)
+                    tel_synced = tel_synced.reindex(timestamps, method='nearest')
+                    # Build per-driver arrays directly (avoid concat + groupby later)
+                    df_list.append((drv, tel_synced['X'].values, tel_synced['Y'].values))
         except: pass
         
     status_text.text("Phase 4/4: Packaging Animation Frames & Saving...")
     if df_list:
-        map_df = pd.concat(df_list, ignore_index=True).sort_values('SessionTime').fillna(0)
-        for t_val, group in map_df.groupby('SessionTime'):
-            t_sec = t_val.total_seconds()
-            cars = {str(row['Driver']): [float(row['X']), float(row['Y'])] for _, row in group.iterrows()}
-            payload["frames"].append({"t_sec": float(t_sec), "cars": cars})
-        payload["frames"].sort(key=lambda x: x["t_sec"])
+        ts_seconds = [t.total_seconds() for t in timestamps]
+        for idx, t_sec in enumerate(ts_seconds):
+            cars = {}
+            for drv, xs, ys in df_list:
+                x_val = float(xs[idx]); y_val = float(ys[idx])
+                if x_val != 0 or y_val != 0:
+                    cars[drv] = [x_val, y_val]
+            if cars:
+                payload["frames"].append({"t_sec": t_sec, "cars": cars})
         
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     with open(cache_path, 'w', encoding='utf-8') as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
+        json.dump(payload, f, ensure_ascii=False)
 
     try:
         file_name = cache_path.split("\\")[-1]
