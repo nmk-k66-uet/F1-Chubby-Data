@@ -8,7 +8,7 @@ A Formula 1 data analytics and real-time prediction system built on **GCP**. Com
 - **Dynamic ML Predictor** — Random Forest models infer Win and Podium probabilities lap-by-lap, visualized through Sparklines and Radar Charts
 - **Track Dominance & Telemetry** — speed, throttle, and RPM analysis across mini-sectors
 - **Pre-race Predictions** — podium probability for Top 10 drivers, quadrant-based setup profiler, and AI tactical analysis (Google Gemini)
-- **Interactive Race Replay** — JavaScript-based 10 Hz car position replay with interpolated telemetry
+- **Interactive Race Replay** — JavaScript-based 2 Hz car position replay with interpolated telemetry
 - **Comprehensive Analytics** — lap times, tire strategies, position changes, and season standings
 
 ## Tech Stack
@@ -158,7 +158,7 @@ F1-Chubby-Data/
 │   ├── tab_results.py           # Race classification
 │   ├── tab_race_control.py      # Race control messages
 │   ├── predictor_ui.py          # Pre-race prediction UI + Gemini tactical briefing
-│   └── replay_engine.py         # Interactive race replay (10 Hz, JavaScript)
+│   └── replay_engine.py         # Interactive race replay (2 Hz, JavaScript)
 │
 ├── core/                        # Backend logic
 │   ├── data_loader.py           # GCS + FastF1 data loading with 3-tier cache
