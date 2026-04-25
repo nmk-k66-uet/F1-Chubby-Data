@@ -183,6 +183,7 @@ locals {
     "roles/artifactregistry.admin",
     "roles/iam.serviceAccountUser",
     "roles/iam.serviceAccountAdmin",
+    "roles/iam.serviceAccountTokenCreator",
     "roles/iam.workloadIdentityPoolAdmin",
     "roles/resourcemanager.projectIamAdmin",
     "roles/serviceusage.serviceUsageAdmin",
