@@ -29,19 +29,6 @@ variable "network_name" {
   default     = "f1-chubby-vpc"
 }
 
-# ---------- Database ----------
-variable "db_tier" {
-  description = "Cloud SQL machine tier"
-  type        = string
-  default     = "db-f1-micro"
-}
-
-variable "db_password" {
-  description = "PostgreSQL admin password"
-  type        = string
-  sensitive   = true
-}
-
 # ---------- Compute ----------
 variable "vm_machine_type" {
   description = "GCE VM machine type"

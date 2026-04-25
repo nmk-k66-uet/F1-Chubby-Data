@@ -2,9 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies for matplotlib, psycopg2, etc.
+# Install system dependencies for matplotlib, etc.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends gcc g++ libpq-dev curl && \
+    apt-get install -y --no-install-recommends gcc g++ curl && \
     rm -rf /var/lib/apt/lists/*
 
 COPY requirements-streamlit.txt requirements.txt

@@ -17,27 +17,6 @@ output "gcs_buckets" {
   value = module.storage.bucket_names
 }
 
-# --- Database ---
-output "cloudsql_instance_name" {
-  value = module.database.instance_name
-}
-
-output "cloudsql_connection_name" {
-  value = module.database.connection_name
-}
-
-output "cloudsql_public_ip" {
-  value = module.database.public_ip
-}
-
-output "cloudsql_database" {
-  value = module.database.database_name
-}
-
-output "cloudsql_user" {
-  value = module.database.db_user
-}
-
 # --- Compute ---
 output "vm_external_ip" {
   value = module.compute.vm_external_ip

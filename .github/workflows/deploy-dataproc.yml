@@ -8,9 +8,7 @@ on:
         required: true
         type: choice
         options:
-          - etl
           - training
-          - all
 
 permissions:
   contents: read
@@ -71,7 +69,7 @@ jobs:
               --master-boot-disk-size 50GB \
               --image-version 2.1-debian11 \
               --initialization-actions gs://goog-dataproc-initialization-actions-${{ env.REGION }}/python/pip-install.sh \
-              --metadata 'PIP_PACKAGES=fastf1 psycopg2-binary numpy<2 influxdb-client requests' \
+              --metadata 'PIP_PACKAGES=fastf1 numpy<2 influxdb-client requests' \
               --max-idle 600s \
               --project ${{ env.PROJECT_ID }} \
               --bucket ${{ env.STAGING_BUCKET }} \
@@ -79,19 +77,8 @@ jobs:
               --service-account f1-dataproc-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com
           fi
 
-      - name: Submit ETL Job
-        if: inputs.job_type == 'etl' || inputs.job_type == 'all'
-        run: |
-          gcloud dataproc jobs submit pyspark \
-            gs://${{ env.STAGING_BUCKET }}/spark/etl_pipeline.py \
-            --cluster ${{ env.CLUSTER_NAME }} \
-            --region ${{ env.REGION }} \
-            --project ${{ env.PROJECT_ID }} \
-            --jars gs://spark-lib/postgres/postgresql-42.7.3.jar \
-            --py-files gs://${{ env.STAGING_BUCKET }}/spark/core_dependencies.zip
-
       - name: Submit Model Training Job
-        if: inputs.job_type == 'training' || inputs.job_type == 'all'
+        if: inputs.job_type == 'training'
         run: |
           gcloud dataproc jobs submit pyspark \
             gs://${{ env.STAGING_BUCKET }}/spark/training_pipeline.py \

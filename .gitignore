@@ -213,12 +213,7 @@ __marimo__/
 
 /myenv
 
-f1_cache/2022
-f1_cache/2023
-f1_cache/2024
-f1_cache/2025
-f1_cache/2026
-f1_cache/fastf1_http_cache.sqlite
+f1_cache/
 
 assets/gemini_key.txt
 

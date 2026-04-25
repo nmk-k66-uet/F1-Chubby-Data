@@ -6,7 +6,6 @@ f1_cache/
 infra/
 spark/
 model_serving/
-Legacy Functions/
 schemas/
 *.md
 *.mmd

@@ -27,7 +27,6 @@ resource "google_project_service" "apis" {
   for_each = toset([
     "cloudresourcemanager.googleapis.com",
     "compute.googleapis.com",
-    "sqladmin.googleapis.com",
     "pubsub.googleapis.com",
     "storage.googleapis.com",
     "iam.googleapis.com",
@@ -67,17 +66,6 @@ module "storage" {
 
   project_id = var.project_id
   region     = var.region
-
-  depends_on = [google_project_service.apis]
-}
-
-module "database" {
-  source = "./modules/database"
-
-  project_id  = var.project_id
-  region      = var.region
-  db_tier     = var.db_tier
-  db_password = var.db_password
 
   depends_on = [google_project_service.apis]
 }
@@ -189,7 +177,6 @@ locals {
   sa_roles = [
     "roles/storage.admin",
     "roles/pubsub.admin",
-    "roles/cloudsql.admin",
     "roles/compute.admin",
     "roles/dataproc.admin",
     "roles/run.admin",

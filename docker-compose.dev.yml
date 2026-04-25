@@ -3,31 +3,8 @@
 # Quick start:
 #   cp .env.dev.example .env
 #   docker compose -f docker-compose.dev.yml up --build
-#
-# On first run, the ETL service seeds PostgreSQL (~5 min with f1_cache, ~30 min cold).
-# Streamlit starts only after ETL completes. Subsequent runs skip ETL if data exists.
-# The FastF1 cache (f1_cache/) is shared between ETL and Streamlit containers.
 
 services:
-  postgres:
-    image: postgres:15-alpine
-    container_name: f1-postgres
-    ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_DB: f1chubby
-      POSTGRES_USER: f1admin
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localdev123}
-    volumes:
-      - ./sql/init.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U f1admin -d f1chubby"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
-
   influxdb:
     image: influxdb:2.7
     container_name: f1-influxdb
@@ -86,36 +63,5 @@ services:
         condition: service_started
     restart: unless-stopped
 
-  # One-shot ETL: seeds PostgreSQL with FastF1 historical data
-  # Runs automatically on first `docker compose up`, exits when done.
-  # Safe to re-run — all inserts use ON CONFLICT DO UPDATE.
-  etl:
-    build: .
-    container_name: f1-etl
-    restart: "no"
-    entrypoint:
-      - python
-      - scripts/load_historical_data.py
-      - --host
-      - postgres
-      - --user
-      - f1admin
-      - --password
-      - ${POSTGRES_PASSWORD:-localdev123}
-      - --init-schema
-      - --skip-if-seeded
-      - --offline
-      - --years
-      - "2024"
-      - "2025"
-      - "2026"
-    volumes:
-      - ./scripts:/app/scripts:ro
-      - ./f1_cache:/app/f1_cache
-    depends_on:
-      postgres:
-        condition: service_healthy
-
 volumes:
-  pgdata:
   influxdb-data:
