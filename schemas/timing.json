@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "F1 Timing Message",
+  "description": "Pub/Sub message for f1-timing topic — one record per driver per lap.",
+  "type": "object",
+  "required": [
+    "timestamp_ms",
+    "driver_id",
+    "lap_number",
+    "position",
+    "lap_time_ms",
+    "gap_to_leader_ms",
+    "interval_ms",
+    "tyre_compound",
+    "tyre_age_laps",
+    "stint_number",
+    "pit_in_lap",
+    "pit_out_lap"
+  ],
+  "properties": {
+    "timestamp_ms": {
+      "type": "integer",
+      "description": "UTC epoch milliseconds when this timing sample was produced."
+    },
+    "driver_id": {
+      "type": "string",
+      "description": "Three-letter driver abbreviation, e.g. VER, HAM."
+    },
+    "lap_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "position": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20
+    },
+    "lap_time_ms": {
+      "type": ["number", "null"],
+      "description": "Lap time in milliseconds. Null on first lap or missing."
+    },
+    "gap_to_leader_ms": {
+      "type": ["number", "null"],
+      "description": "Time gap to P1 in milliseconds. Null for P1."
+    },
+    "interval_ms": {
+      "type": ["number", "null"],
+      "description": "Time gap to car ahead in milliseconds. Null for P1."
+    },
+    "tyre_compound": {
+      "type": "string",
+      "enum": ["SOFT", "MEDIUM", "HARD", "INTERMEDIATE", "WET", "UNKNOWN"]
+    },
+    "tyre_age_laps": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "stint_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pit_in_lap": {
+      "type": "boolean",
+      "description": "True if this driver pitted at the end of this lap."
+    },
+    "pit_out_lap": {
+      "type": "boolean",
+      "description": "True if this driver emerged from pits at the start of this lap."
+    }
+  },
+  "additionalProperties": false
+}

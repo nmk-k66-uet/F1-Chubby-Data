@@ -5,6 +5,9 @@ import os
 import time
 import streamlit.components.v1 as components
 
+from core.data_loader import gcs, get_blob
+
+GCS_CACHE_BUCKET = os.environ.get("GCS_CACHE_BUCKET", "f1chubby-cache")
 CACHE_DIR = 'f1_cache'
 
 """Replay Engine Component - Interactive Race Replay Visualization
@@ -18,19 +21,10 @@ Provides a native JavaScript-based race replay engine showing:
 Data is generated from FastF1 telemetry and cached for performance.
 """
 
-import streamlit as st
-import pandas as pd
-import json
-import os
-import time
-import streamlit.components.v1 as components
-
-CACHE_DIR = 'f1_cache'
-
 # ==========================================
 # LAZY-LOADED REPLAY ENGINE (NATIVE JS)
 # ==========================================
-def generate_and_cache_replay_payload(session, max_lap_avail, cache_path):
+def generate_and_cache_replay_payload(session, max_lap_avail, cache_path, blob):
     """
     Generates and caches replay data payload from FastF1 session.
     
@@ -203,6 +197,11 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path):
         
     with open(cache_path, 'w', encoding='utf-8') as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
+
+    file_name = cache_path.split("\\")[-1]
+    gcs.upload_file(GCS_CACHE_BUCKET, blob_destination=blob + "/" + file_name, file_path=cache_path, content_type = "application/json")
+
+    os.remove(cache_path)
         
     st.session_state['js_payload'] = payload
     st.session_state['replay_session_id'] = cache_path
@@ -223,17 +222,28 @@ def fragment_replay_continuous(session, year, round_num, session_code):
 
     cache_filename = f"replay_{year}_{round_num}_{session_code}.json"
     cache_path = os.path.join(CACHE_DIR, cache_filename)
-    
+    blob = get_blob(year, round_num, session_code)
+    blob_file = os.path.join(blob, cache_filename).replace("\\", "/")
+
+    is_exits = False
+    for sub_blob in gcs.list_blobs(bucket_name=GCS_CACHE_BUCKET):
+        if blob_file == sub_blob.name:
+            is_exits = True
+            break
+
     if 'js_payload' not in st.session_state or st.session_state.get('replay_session_id') != cache_path:
-        if os.path.exists(cache_path):
+        if is_exits:
+            gcs.download_one_file(GCS_CACHE_BUCKET, blob_file, cache_path)
+
             with st.spinner("Loading Replay package from local cache..."):
                 with open(cache_path, 'r', encoding='utf-8') as f:
                     st.session_state['js_payload'] = json.load(f)
                 st.session_state['replay_session_id'] = cache_path
+            os.remove(cache_path)
         else:
             st.info("Replay data is not cached yet. Generating it requires processing all telemetry points for 20 cars.")
             if st.button("Load & Generate Replay Data", type="primary"):
-                generate_and_cache_replay_payload(session, max_lap_avail, cache_path)
+                generate_and_cache_replay_payload(session, max_lap_avail, cache_path, blob)
                 st.rerun(scope="fragment")
             return
 

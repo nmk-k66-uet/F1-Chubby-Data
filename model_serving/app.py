@@ -25,7 +25,7 @@ logger = logging.getLogger("model-api")
 # Configuration
 # ---------------------------------------------------------------------------
 MODEL_DIR = os.environ.get("MODEL_DIR", "/app/models")
-GCS_BUCKET = os.environ.get("GCS_BUCKET", "f1chubby-models")
+GCS_BUCKET = os.environ.get("GCS_BUCKET", "f1chubby-model")
 USE_GCS = os.environ.get("USE_GCS", "true").lower() == "true"
 
 # Model file names (must match what's uploaded to GCS)

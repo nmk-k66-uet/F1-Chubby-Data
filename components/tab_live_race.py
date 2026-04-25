@@ -3,7 +3,7 @@ Live Race Tab Component - Real-time Race Updates and Analysis
 
 Data sources:
   - InfluxDB `predictions` measurement (production: Spark slow path writes here)
-  - Model Serving API HTTP fallback (LOCAL_MODE or when InfluxDB has no data)
+  - Model Serving API HTTP fallback (when InfluxDB has no predictions)
   - FastF1 session.laps for historical replay simulation
 
 Does NOT import ml_core or joblib.
@@ -54,35 +54,98 @@ def _predict_via_api(live_lap_df):
         return live_lap_df
 
 
-def _fetch_predictions_from_influxdb(race_id, lap_number):
-    """Query InfluxDB for pre-computed predictions. Returns list of dicts or None."""
-    if not INFLUXDB_TOKEN or LOCAL_MODE:
-        return None
+def _get_influx_client():
+    """Create a reusable InfluxDB client. Returns (client, query_api) or (None, None)."""
+    if not INFLUXDB_TOKEN:
+        return None, None
     try:
         from influxdb_client import InfluxDBClient
         client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG)
-        query_api = client.query_api()
+        return client, client.query_api()
+    except Exception:
+        return None, None
+
+
+def _fetch_live_timing_from_influxdb(race_id):
+    """
+    Query InfluxDB live_timing measurement for the latest lap snapshot.
+    Returns (DataFrame, lap_number, total_data_available) or (None, 0, False).
+    """
+    client, query_api = _get_influx_client()
+    if client is None:
+        return None, 0, False
+    try:
         flux = f'''
         from(bucket: "{INFLUXDB_BUCKET}")
-          |> range(start: -5m)
+          |> range(start: -30m)
+          |> filter(fn: (r) => r._measurement == "live_timing" and r.race_id == "{race_id}")
+          |> last()
+          |> pivot(rowKey:["_time", "driver"], columnKey: ["_field"], valueColumn: "_value")
+        '''
+        tables = query_api.query(flux)
+        rows = []
+        for table in tables:
+            for record in table.records:
+                rows.append({
+                    "Driver": record.values.get("driver", ""),
+                    "CurrentPosition": int(record.values.get("position", 20)),
+                    "GapToLeader": float(record.values.get("gap_to_leader", 0)),
+                    "Interval": float(record.values.get("interval", 0)),
+                    "LapTimeMs": int(record.values.get("lap_time_ms", 0)),
+                    "Compound": str(record.values.get("compound", "MEDIUM")),
+                    "TyreLife": int(record.values.get("tyre_life", 0)),
+                    "CompoundIdx": int(record.values.get("compound_idx", 1)),
+                    "IsPitOut": int(record.values.get("is_pit_out", 0)),
+                    "LapNumber": int(record.values.get("lap_number", 0)),
+                    "LapFraction": float(record.values.get("lap_fraction", 0)),
+                    "_time": record.get_time(),
+                })
+        client.close()
+        if not rows:
+            return None, 0, False
+        df = pd.DataFrame(rows).sort_values("CurrentPosition")
+        lap_number = int(df["LapNumber"].max())
+        return df, lap_number, True
+    except Exception:
+        if client:
+            client.close()
+        return None, 0, False
+
+
+def _fetch_predictions_from_influxdb(race_id):
+    """Query InfluxDB for the latest pre-computed predictions. Returns (list of dicts, timestamp) or (None, None)."""
+    client, query_api = _get_influx_client()
+    if client is None:
+        return None, None
+    try:
+        flux = f'''
+        from(bucket: "{INFLUXDB_BUCKET}")
+          |> range(start: -30m)
           |> filter(fn: (r) => r._measurement == "predictions" and r.race_id == "{race_id}")
           |> last()
           |> pivot(rowKey:["_time", "driver"], columnKey: ["_field"], valueColumn: "_value")
         '''
         tables = query_api.query(flux)
         results = []
+        latest_ts = None
         for table in tables:
             for record in table.records:
+                ts = record.get_time()
+                if latest_ts is None or (ts and ts > latest_ts):
+                    latest_ts = ts
                 results.append({
                     "driver": record.values.get("driver", ""),
-                    "win_prob": record.values.get("win_prob", 0),
-                    "podium_prob": record.values.get("podium_prob", 0),
-                    "timestamp": record.get_time(),
+                    "win_prob": float(record.values.get("win_prob", 0)),
+                    "podium_prob": float(record.values.get("podium_prob", 0)),
+                    "lap_number": int(record.values.get("lap_number", 0)),
+                    "timestamp": ts,
                 })
         client.close()
-        return results if results else None
+        return (results, latest_ts) if results else (None, None)
     except Exception:
-        return None
+        if client:
+            client.close()
+        return None, None
 
 def format_lap_time(td):
     """
@@ -205,22 +268,32 @@ def render_radar(p1_row, p2_row):
     st.plotly_chart(fig, width='stretch', config={'displayModeBar': False})
 
 
+def _staleness_badge(pred_ts):
+    """Return (label, color) for the prediction staleness indicator."""
+    if pred_ts is None:
+        return "No data", "#6c757d"
+    from datetime import datetime, timezone
+    age = (datetime.now(timezone.utc) - pred_ts).total_seconds()
+    if age > 30:
+        return f"Stale ({int(age)}s)", "#dc3545"  # red
+    if age > 15:
+        return f"Delayed ({int(age)}s)", "#ffc107"  # yellow
+    return "Live", "#28a745"  # green
+
+
 @st.fragment(run_every=3)
 def fragment_live_race(session):
     """
     Renders the Live Race tab with real-time race information.
     
-    Features:
-    - Live timing table showing lap times and pit stop information
-    - Win probability calculations for top drivers
-    - Momentum indicators showing probability trends
-    - Radar charts comparing selected drivers' performance
-    - Sparkline history charts
+    Data flow:
+    - InfluxDB live_timing (fast path) + predictions (slow path)
+    - Shows offline status when InfluxDB is unreachable
     
     Updates every 3 seconds using @st.fragment(run_every=3).
     
     Args:
-        session: FastF1 race session object with live lap data.
+        session: FastF1 race session object (used for total lap count).
     """
     # === CSS STYLING FOR LIVE INDICATOR ===
     st.markdown("""
@@ -228,113 +301,119 @@ def fragment_live_race(session):
         .live-header { color: #ff4b4b; font-weight: 800; animation: blink 2s infinite; }
         @keyframes blink { 0% {opacity: 1;} 50% {opacity: 0.5;} 100% {opacity: 1;} }
         .stExpander { border: 1px solid rgba(255,255,255,0.1) !important; border-radius: 8px !important; background: #121418 !important;}
+        .source-badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:bold; color:#fff; }
         </style>
     """, unsafe_allow_html=True)
-    
-    # ==========================================
-    # 1. TIỀN XỬ LÝ DỮ LIỆU HISTORICAL THÀNH STREAM 
-    # ==========================================
-    @st.cache_data(show_spinner=False)
-    def prepare_stream_data(year, event_name):
-        laps = session.laps.copy()
-        if laps.empty: return pd.DataFrame(), 0
-        
-        total_laps = laps['LapNumber'].max()
-        laps['CompoundIdx'] = laps['Compound'].map({'SOFT': 0, 'MEDIUM': 1, 'HARD': 2}).fillna(1)
-        laps['IsPitOut'] = laps['PitOutTime'].notna().astype(int)
-        laps['LapFraction'] = laps['LapNumber'] / total_laps
-        
-        leader_times = laps[laps['Position'] == 1].set_index('LapNumber')['Time']
-        def calc_gap(row):
-            if row['LapNumber'] in leader_times.index and pd.notna(row['Time']):
-                gap = (row['Time'] - leader_times[row['LapNumber']]).total_seconds()
-                return max(0.0, gap)
-            return 0.0
-            
-        laps['GapToLeader'] = laps.apply(calc_gap, axis=1)
-        laps.rename(columns={'Position': 'CurrentPosition'}, inplace=True)
-        
-        laps = laps.sort_values(['LapNumber', 'CurrentPosition'])
-        laps['Interval'] = laps.groupby('LapNumber')['GapToLeader'].diff()
-        laps.loc[laps['CurrentPosition'] == 1, 'Interval'] = 0.0
-        laps['Interval'] = laps['Interval'].fillna(0.0).apply(lambda x: max(0.0, x))
-        
-        return laps, total_laps
 
     year = st.session_state['selected_event']['year']
     event = st.session_state['selected_event']['name']
-    
-    stream_df, total_laps = prepare_stream_data(year, event)
-    if stream_df.empty:
-        st.warning("Dữ liệu Telemetry vòng chạy (Laps) của chặng này không tồn tại hoặc chưa diễn ra.")
+    race_id = f"{year}_{event}"
+
+    # ==========================================
+    # 1. DATA SOURCE: InfluxDB only
+    # ==========================================
+    influx_df, influx_lap, has_influx = _fetch_live_timing_from_influxdb(race_id)
+
+    if has_influx and influx_df is not None and not influx_df.empty:
+        live_lap_df = influx_df
+        current_lap = influx_lap
+        total_laps_est = session.laps['LapNumber'].max() if not session.laps.empty else current_lap
+        total_laps = int(total_laps_est) if pd.notna(total_laps_est) else current_lap
+    else:
+        # InfluxDB unreachable or no data
+        st.markdown("""
+            <div style='text-align:center; padding:60px 20px;'>
+                <span class='source-badge' style='background:#dc3545; font-size:14px;'>⚫ OFFLINE</span>
+                <h3 style='margin-top:16px; color:#888;'>Live Timing Unavailable</h3>
+                <p style='color:#666;'>Cannot reach InfluxDB or no race data available.<br/>
+                Ensure InfluxDB is running and race data is being streamed.</p>
+            </div>
+        """, unsafe_allow_html=True)
+        return
+
+    # Ensure prob_history exists
+    if 'prob_history' not in st.session_state:
+        st.session_state['prob_history'] = pd.DataFrame(columns=['Lap', 'Driver', 'WinProb'])
+
+    if live_lap_df.empty:
+        st.info("Waiting for live timing data…")
         return
 
     # ==========================================
-    # 2. CƠ CHẾ ĐIỀU HƯỚNG LUỒNG 
+    # 2. LAYOUT: 2 columns (40% Timing, 60% ML)
     # ==========================================
-    if 'sim_lap' not in st.session_state:
-        st.session_state['sim_lap'] = 1.0 
-        st.session_state['prob_history'] = pd.DataFrame(columns=['Lap', 'Driver', 'WinProb'])
-        
-    current_lap = int(st.session_state['sim_lap'])
-    
-    live_lap_df = stream_df[stream_df['LapNumber'] == current_lap].dropna(subset=['CurrentPosition']).copy()
-    live_lap_df = live_lap_df.sort_values('CurrentPosition')
-    
-    if st.session_state['sim_lap'] < total_laps:
-        st.session_state['sim_lap'] += 1
-
-    # BỐ CỤC MỚI: 2 CỘT CHÍNH (40% cho Timing, 60% cho ML)
     col_tower, col_predict = st.columns([1.2, 1.8], gap="large")
-    
+
     # ==========================================
-    # PHÂN VÙNG TRÁI: LIVE TIMING TOWER
+    # LEFT: LIVE TIMING TOWER (fast path)
     # ==========================================
     with col_tower:
+        st.markdown("<span class='source-badge' style='background:#28a745;'>InfluxDB Live</span>", unsafe_allow_html=True)
+
         status_color = "red" if current_lap < total_laps else "gray"
-        status_text = f"LAP {current_lap}/{int(total_laps)}" if current_lap < total_laps else "🏁 FINISHED"
+        status_text = f"LAP {current_lap}/{total_laps}" if current_lap < total_laps else "🏁 FINISHED"
         st.markdown(f"<h3 class='live-header' style='color: {status_color}; margin-top:0;'>{status_text}</h3>", unsafe_allow_html=True)
-        
+
         display_df = pd.DataFrame({
             "Pos": live_lap_df['CurrentPosition'].astype(int),
             "Driver": live_lap_df['Driver'],
-            "Gap": [f"Leader" if g == 0 else f"+{g:.3f}s" for g in live_lap_df['GapToLeader']],
+            "Gap": ["Leader" if g == 0 else f"+{g:.3f}s" for g in live_lap_df['GapToLeader']],
             "Interval": ["-" if p == 1 else f"+{i:.3f}s" for p, i in zip(live_lap_df['CurrentPosition'], live_lap_df['Interval'])],
             "Tyre": live_lap_df['Compound'].astype(str).str[:1]
         })
-        st.dataframe(display_df.head(20), hide_index=True, width='stretch', height=450)
+
+        # Highlight P1/P2/P3 with podium colours
+        podium_colors = {1: "#FFD700", 2: "#C0C0C0", 3: "#CD7F32"}  # gold, silver, bronze
+
+        def _highlight_podium(row):
+            pos = row["Pos"]
+            if pos in podium_colors:
+                bg = podium_colors[pos]
+                return [f"background-color: {bg}; color: #000; font-weight: bold"] * len(row)
+            return [""] * len(row)
+
+        styled_df = display_df.head(20).style.apply(_highlight_podium, axis=1)
+        st.dataframe(styled_df, hide_index=True, width='stretch', height=450)
 
     # ==========================================
-    # PHÂN VÙNG PHẢI: ML INSPECTOR PANEL
+    # RIGHT: ML INSPECTOR PANEL (slow path)
     # ==========================================
     with col_predict:
         st.markdown("<h3 style='margin-top:0;'>Live Predictor</h3>", unsafe_allow_html=True)
-        
-        # Chạy Model (via API or InfluxDB)
+
+        # --- Predictions: InfluxDB → Model API → static fallback ---
+        pred_source = "none"
         try:
-            # Try InfluxDB first (production: slow path writes predictions here)
-            race_id = f"{year}_{event}"
-            influx_preds = _fetch_predictions_from_influxdb(race_id, current_lap)
+            influx_preds, pred_ts = _fetch_predictions_from_influxdb(race_id)
             if influx_preds:
                 pred_map = {p["driver"]: p for p in influx_preds}
                 scored_df = live_lap_df.copy()
                 scored_df["Live_Win_Prob"] = scored_df["Driver"].map(lambda d: pred_map.get(d, {}).get("win_prob", 0))
                 scored_df["Live_Podium_Prob"] = scored_df["Driver"].map(lambda d: pred_map.get(d, {}).get("podium_prob", 0))
                 scored_df = scored_df.sort_values(by=["Live_Win_Prob", "Live_Podium_Prob"], ascending=[False, False])
+                pred_source = "influxdb"
             else:
-                # Fallback: call Model Serving API directly
                 scored_df = _predict_via_api(live_lap_df)
-        except:
-            # Static fallback
+                pred_source = "api"
+                pred_ts = None
+        except Exception:
             scored_df = live_lap_df.copy()
             scored_df['Live_Win_Prob'] = [0.65, 0.22, 0.05, 0.04, 0.04] + [0]*(len(scored_df)-5)
             scored_df['Live_Podium_Prob'] = [0.95, 0.85, 0.78, 0.40, 0.02] + [0]*(len(scored_df)-5)
+            pred_ts = None
 
-        # LƯU LỊCH SỬ ĐỂ VẼ SPARKLINE
+        # Staleness indicator
+        if pred_source == "influxdb":
+            stale_label, stale_color = _staleness_badge(pred_ts)
+            st.markdown(f"<span class='source-badge' style='background:{stale_color};'>Predictions: {stale_label}</span>", unsafe_allow_html=True)
+        elif pred_source == "api":
+            st.markdown("<span class='source-badge' style='background:#17a2b8;'>Predictions: API Fallback</span>", unsafe_allow_html=True)
+
+        # Update sparkline history
         curr_laps = scored_df[['Driver', 'Live_Win_Prob']].copy()
         curr_laps['Lap'] = current_lap
         curr_laps['WinProb'] = curr_laps['Live_Win_Prob'] * 100
-        
+
         st.session_state['prob_history'] = st.session_state['prob_history'][st.session_state['prob_history']['Lap'] != current_lap]
         st.session_state['prob_history'] = pd.concat([st.session_state['prob_history'], curr_laps[['Lap', 'Driver', 'WinProb']]])
         st.session_state['prob_history'] = st.session_state['prob_history'][st.session_state['prob_history']['Lap'] >= current_lap - 10]
@@ -354,9 +433,9 @@ def fragment_live_race(session):
                     st.caption("📈 Impact: [+] Tyre  [+] Track Pos")
                 with c_chart:
                     render_sparkline(drv1, '#4C78A8')
-                    
+
             st.divider()
-            
+
             if drv2:
                 prob2 = top_win.iloc[1]['Live_Win_Prob'] * 100
                 mom2, color2 = get_momentum(drv2, prob2)
@@ -381,8 +460,3 @@ def fragment_live_race(session):
             for _, row in top_pod.iterrows():
                 st.write(f"**{row['Driver']}** - {row['Live_Podium_Prob']*100:.1f}%")
                 st.progress(int(row['Live_Podium_Prob']*100))
-                
-        if st.button("🔄 Restart Simulation", width='stretch'):
-            st.session_state['sim_lap'] = 1.0
-            st.session_state['prob_history'] = pd.DataFrame(columns=['Lap', 'Driver', 'WinProb'])
-            st.rerun()
