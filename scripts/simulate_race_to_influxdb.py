@@ -48,13 +48,18 @@ INFLUXDB_ORG = os.environ.get("INFLUXDB_ORG", "f1chubby")
 INFLUXDB_BUCKET = os.environ.get("INFLUXDB_BUCKET", "live_race")
 MODEL_API_URL = os.environ.get("MODEL_API_URL", "http://localhost:8080")
 
-# Race to simulate
-YEAR = 2026
-ROUND_NUM = 1  # Australian GP is round 2 in 2026
-EVENT_NAME = "Australian Grand Prix"
-RACE_ID = f"{YEAR}_{EVENT_NAME}"
+# Defaults — overridden by CLI args
+DEFAULT_YEAR = 2026
+DEFAULT_ROUND = 1
+DEFAULT_EVENT = "Australian Grand Prix"
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "f1_cache")
+
+# Set at runtime by main()
+YEAR = DEFAULT_YEAR
+ROUND_NUM = DEFAULT_ROUND
+EVENT_NAME = DEFAULT_EVENT
+RACE_ID = f"{YEAR}_{EVENT_NAME}"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -83,7 +88,7 @@ def teardown(client):
 
 
 def load_session():
-    """Load the 2026 Australian GP Race session from local FastF1 cache."""
+    """Load the Race session from local FastF1 cache using global YEAR/ROUND_NUM."""
     cache_dir = os.path.abspath(CACHE_DIR)
     fastf1.Cache.enable_cache(cache_dir)
     fastf1.set_log_level("WARNING")
@@ -289,9 +294,17 @@ def write_race_control(write_api, rc_msgs, race_start_time, base_ts):
 # ---------------------------------------------------------------------------
 
 def main():
+    global YEAR, ROUND_NUM, EVENT_NAME, RACE_ID
+
     parser = argparse.ArgumentParser(description="Simulate F1 race → InfluxDB or Pub/Sub")
     parser.add_argument("--speed", type=float, default=1.0,
                         help="Replay speed in laps per second (default: 1.0)")
+    parser.add_argument("--year", type=int, default=DEFAULT_YEAR,
+                        help=f"Season year (default: {DEFAULT_YEAR})")
+    parser.add_argument("--round", type=int, default=DEFAULT_ROUND,
+                        help=f"Round number (default: {DEFAULT_ROUND})")
+    parser.add_argument("--event", type=str, default=DEFAULT_EVENT,
+                        help=f"Event name (default: {DEFAULT_EVENT})")
     parser.add_argument("--teardown", action="store_true",
                         help="Delete all simulation data from InfluxDB and exit")
     parser.add_argument("--pubsub", action="store_true",
@@ -299,6 +312,11 @@ def main():
     parser.add_argument("--gcp-project", type=str, default=None,
                         help="GCP project ID (required with --pubsub)")
     args = parser.parse_args()
+
+    YEAR = args.year
+    ROUND_NUM = args.round
+    EVENT_NAME = args.event
+    RACE_ID = f"{YEAR}_{EVENT_NAME}"
 
     client = get_influx_client()
 
@@ -395,6 +413,13 @@ def run_pubsub_mode(args):
     print(f"Race control messages: {len(rc_msgs)}")
     print(f"Replay speed: {args.speed} laps/sec")
     print(f"Project: {project}")
+    print()
+
+    # Clear previous simulation data from InfluxDB before re-publishing
+    print("Clearing previous simulation data from InfluxDB …")
+    client = get_influx_client()
+    teardown(client)
+    client.close()
     print()
 
     # Publish race control messages upfront

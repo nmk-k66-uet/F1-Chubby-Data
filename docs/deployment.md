@@ -48,6 +48,10 @@ project_id  = "<YOUR_PROJECT_ID>"
 region      = "asia-southeast1"
 zone        = "asia-southeast1-b"
 github_repo = "<YOUR_GITHUB_ORG>/<YOUR_REPO_NAME>"
+
+# Optional: override InfluxDB credentials (defaults are fine for dev)
+# influxdb_token    = "my-custom-token"
+# influxdb_password = "my-custom-password"
 ```
 
 Then run:
@@ -185,13 +189,38 @@ gcloud compute ssh f1-chubby-vm --zone asia-southeast1-b -- \
 2. **Streaming consumers start automatically** with docker-compose (no manual step needed).
 
 3. **Run race simulation** (from your local machine or the VM):
+
+   **Direct InfluxDB mode** (default — writes straight to InfluxDB):
    ```bash
-   python scripts/simulate_race_to_influxdb.py --speed 3
+   # Default: 2026 Australian GP at 1 lap/sec
+   python scripts/simulate_race_to_influxdb.py
+
+   # Custom race at 5 laps/sec
+   python scripts/simulate_race_to_influxdb.py --year 2025 --round 3 --event "Australian Grand Prix" --speed 5
+
+   # Only teardown (delete previous data) without re-simulating
+   python scripts/simulate_race_to_influxdb.py --teardown
    ```
+
+   **Pub/Sub mode** (publishes to Cloud Pub/Sub; streaming consumers write to InfluxDB):
+   ```bash
+   # Requires --gcp-project; previous InfluxDB data is cleared automatically
+   python scripts/simulate_race_to_influxdb.py --pubsub --gcp-project gen-lang-client-0314607994
+
+   # Custom race via Pub/Sub at 3 laps/sec
+   python scripts/simulate_race_to_influxdb.py --pubsub --gcp-project gen-lang-client-0314607994 \
+     --year 2025 --round 5 --event "Chinese Grand Prix" --speed 3
+   ```
+   > **Note:** Pub/Sub mode requires `google-cloud-pubsub` and valid GCP credentials.
+   > The streaming-fast and streaming-slow containers must be running to consume messages and write to InfluxDB.
 
 4. **Open dashboard:** `http://<VM_EXTERNAL_IP>` (or `http://<YOUR_DOMAIN>` if DNS is configured)
 
 5. Navigate to a race → **Live Race** tab to see real-time timing tower and ML predictions updating.
+   - **InfluxDB Connected + 📡 Live Stream**: data is flowing in real-time
+   - **InfluxDB Connected + 🏁 Race Finished**: simulation completed, final standings shown
+   - **InfluxDB Connected + No Data**: click "Re-run Live Simulation" for historical races
+   - **⚫ Stream Offline**: InfluxDB service is down
 
 6. **Stop when done:**
    ```bash

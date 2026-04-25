@@ -15,7 +15,7 @@ on:
       - '.streamlit/**'
       - 'model_serving/**'
       - 'streaming/**'
-      - 'simulation_service.py'
+      - 'scripts/**'
       - 'schemas/**'
   workflow_dispatch:
 
@@ -54,15 +54,12 @@ jobs:
         run: |
           # Copy core app files
           gcloud compute scp --recurse \
-            main.py Dockerfile docker-compose.yml requirements-streamlit.txt streaming \
+            main.py Dockerfile docker-compose.yml requirements-streamlit.txt streaming scripts \
             .streamlit core components pages assets model_serving \
             ${{ env.VM_NAME }}:~/app/ \
             --zone ${{ env.ZONE }} \
             --quiet
-          # Copy simulation service and schemas if they exist
-          for f in simulation_service.py; do
-            [ -f "$f" ] && gcloud compute scp "$f" ${{ env.VM_NAME }}:~/app/ --zone ${{ env.ZONE }} --quiet || true
-          done
+          # Copy schemas if they exist
           [ -d "schemas" ] && gcloud compute scp --recurse schemas ${{ env.VM_NAME }}:~/app/ --zone ${{ env.ZONE }} --quiet || true
 
       - name: Deploy on VM
