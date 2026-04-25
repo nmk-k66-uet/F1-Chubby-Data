@@ -5,7 +5,7 @@ services:
     image: influxdb:2.7
     container_name: f1-influxdb
     ports:
-      - "8086"
+      - "8086:8086"
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
       DOCKER_INFLUXDB_INIT_USERNAME: admin
@@ -20,11 +20,12 @@ services:
   model-api:
     build: ./model_serving
     container_name: f1-model-api
-    ports:
+    # No host port — internal only (accessed as model-api:8080 on docker network)
+    expose:
       - "8080"
     environment:
       MODEL_DIR: /app/models
-      GCS_BUCKET: ${GCS_MODELS_BUCKET:-f1chubby-model-gen-lang-client-0314607994}
+      GCS_BUCKET: ${GCS_MODELS_BUCKET:-f1chubby-models-gen-lang-client-0314607994}
       USE_GCS: ${USE_GCS:-true}
     volumes:
       - model-cache:/app/models
@@ -43,43 +44,12 @@ services:
       INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-f1chubby-influx-token}
       INFLUXDB_ORG: f1chubby
       INFLUXDB_BUCKET: live_race
-      GCS_CACHE_BUCKET: ${GCS_CACHE_BUCKET:-f1chubby-cache-gen-lang-client-0314607994}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GCS_BUCKET: ${GCS_BUCKET:-f1chubby-raw}
     volumes:
       - ./f1_cache:/app/f1_cache
     depends_on:
       - model-api
       - influxdb
-    restart: unless-stopped
-
-  streaming-fast:
-    build: ./streaming
-    container_name: f1-streaming-fast
-    entrypoint:
-      - python
-      - streaming_fast.py
-      - --project=${GCP_PROJECT_ID:-gen-lang-client-0314607994}
-      - --influxdb-url=http://influxdb:8086
-      - --influxdb-token=${INFLUXDB_TOKEN:-f1chubby-influx-token}
-      - --duration=0
-    depends_on:
-      - influxdb
-    restart: unless-stopped
-
-  streaming-slow:
-    build: ./streaming
-    container_name: f1-streaming-slow
-    entrypoint:
-      - python
-      - streaming_slow.py
-      - --project=${GCP_PROJECT_ID:-gen-lang-client-0314607994}
-      - --influxdb-url=http://influxdb:8086
-      - --influxdb-token=${INFLUXDB_TOKEN:-f1chubby-influx-token}
-      - --model-api-url=http://model-api:8080
-      - --duration=0
-    depends_on:
-      - influxdb
-      - model-api
     restart: unless-stopped
 
 volumes:

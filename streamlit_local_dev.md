@@ -184,3 +184,58 @@ gsutil cp gs://f1chubby-model-gen-lang-client-0314607994/*.pkl assets/Models/
 
 **Port conflict**
 → If 8501, 8080, or 8086 are already in use, either stop the conflicting service or change the host port in `docker-compose.dev.yml`.
+
+---
+
+## Running Without Docker
+
+If you prefer running the Streamlit app directly on your host (e.g. for faster iteration or IDE debugging):
+
+### Prerequisites
+
+- Python 3.11+
+- Model API and InfluxDB running separately (via Docker or otherwise)
+- `f1_cache/` directory with cached session data
+- `assets/Models/` with the 3 `.pkl` files (only needed if running model-api locally too)
+
+### Setup
+
+```bash
+# 1. Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate   # Linux/macOS
+# .venv\Scripts\activate    # Windows
+
+# 2. Install dependencies
+pip install -r requirements-streamlit.txt
+
+# 3. Start supporting services (in another terminal)
+docker compose -f docker-compose.dev.yml up influxdb model-api
+
+# 4. Set environment variables
+export MODEL_API_URL=http://localhost:8080
+export INFLUXDB_URL=http://localhost:8086
+export INFLUXDB_TOKEN=f1chubby-influx-token
+export INFLUXDB_ORG=f1chubby
+export INFLUXDB_BUCKET=live_race
+
+# 5. Run Streamlit
+streamlit run main.py
+```
+
+The app is available at **http://localhost:8501**.
+
+### LOCAL_MODE (FastF1-only, no external services)
+
+If you don't need live race features and just want to browse historical data:
+
+```bash
+export LOCAL_MODE=true
+streamlit run main.py
+```
+
+This bypasses InfluxDB queries and Model API calls. Calendar, results, standings, telemetry, and lap data all load from `f1_cache/` or the FastF1 API directly.
+
+---
+
+← Back to [ReadMe.md](ReadMe.md)

@@ -5,7 +5,7 @@ variable "project_id" {
 variable "topic_names" {
   description = "List of Pub/Sub topic names"
   type        = list(string)
-  default     = ["f1-telemetry", "f1-timing", "f1-race-control"]
+  default     = ["f1-timing", "f1-race-control"]
 }
 
 variable "subscription_suffixes" {

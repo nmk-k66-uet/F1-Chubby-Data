@@ -20,10 +20,10 @@ terraform login
 terraform init
 
 # Review planned changes
-terraform plan -var="db_password=YOUR_SECURE_PASSWORD"
+terraform plan
 
 # Apply
-terraform apply -var="db_password=YOUR_SECURE_PASSWORD"
+terraform apply
 
 # View outputs (connection strings, IPs, etc.)
 terraform output
@@ -32,7 +32,7 @@ terraform output
 ## Tear Down
 
 ```bash
-terraform destroy -var="db_password=ANY_VALUE"
+terraform destroy
 ```
 
 ## Modules
@@ -42,7 +42,7 @@ terraform destroy -var="db_password=ANY_VALUE"
 | `networking` | VPC, subnet, firewall rules (SSH, app ports, internal) |
 | `pubsub` | 3 topics + 6 subscriptions (fast/slow per topic) |
 | `storage` | 3 GCS buckets (raw, models, replay) |
-| `database` | Cloud SQL PostgreSQL (db-f1-micro, stopped by default) |
+
 | `compute` | GCE VM e2-medium with Container-Optimized OS |
 | `dataproc` | API enablement + staging bucket |
 | `cloudrun` | API enablement + Artifact Registry repo |
@@ -57,9 +57,11 @@ After `terraform apply`, add these GitHub repo secrets:
 
 ## Cost Management
 
-- Cloud SQL starts with `activation_policy = NEVER` (stopped). Start manually:
-  ```bash
-  gcloud sql instances patch f1-chubby-postgres --activation-policy ALWAYS
-  ```
 - Stop VM when idle: `gcloud compute instances stop f1-chubby-vm --zone asia-southeast1-b`
 - Dataproc clusters are created on-demand, not provisioned here.
+
+---
+
+For the full end-to-end production deployment guide (including CI/CD, VM configuration, and data upload), see [docs/deployment.md](../docs/deployment.md).
+
+← Back to [ReadMe.md](../ReadMe.md)
