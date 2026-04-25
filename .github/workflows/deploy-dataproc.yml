@@ -63,9 +63,9 @@ jobs:
             --project ${{ env.PROJECT_ID }} \
             --bucket ${{ env.STAGING_BUCKET }} \
             --subnet projects/${{ env.PROJECT_ID }}/regions/${{ env.REGION }}/subnetworks/f1-chubby-vpc-subnet \
-            --no-address \
             --service-account f1-dataproc-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com \
-            --pip-packages 'influxdb-client,requests'
+            --metadata 'PIP_PACKAGES=influxdb-client requests' \
+            --initialization-actions gs://goog-dataproc-initialization-actions-${{ env.REGION }}/python/pip-install.sh
 
       - name: Submit ETL Job
         if: inputs.job_type == 'etl' || inputs.job_type == 'all'
