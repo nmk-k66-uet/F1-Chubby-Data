@@ -10,8 +10,7 @@ Submit to Dataproc:
         --properties spark.jars.packages=com.google.cloud:pubsub-spark-connector:1.0.0 \
         --pip-packages 'influxdb-client,requests' \
         -- --project $PROJECT_ID --influxdb-url http://$VM_IP:8086 \
-           --influxdb-token $TOKEN --model-api-url http://$VM_IP:8080 \
-           --race-id "2026_Australian Grand Prix" --total-laps 58
+           --influxdb-token $TOKEN --model-api-url http://$VM_IP:8080
 """
 
 import argparse
@@ -43,6 +42,8 @@ log = logging.getLogger("streaming_slow")
 # ── Pub/Sub timing schema ──────────────────────────────────────────────────
 
 TIMING_SCHEMA = StructType([
+    StructField("race_id", StringType()),
+    StructField("total_laps", IntegerType()),
     StructField("timestamp_ms", IntegerType()),
     StructField("driver_id", StringType()),
     StructField("lap_number", IntegerType()),
@@ -68,15 +69,13 @@ def make_predict_and_write(
     influx_token: str,
     influx_org: str,
     influx_bucket: str,
-    race_id: str,
-    total_laps: int,
 ):
     """Return a foreachBatch callable that calls Model API then writes to InfluxDB."""
 
     def _process_batch(df, batch_id):
         """
-        df has columns: driver_id, lap_number, position, gap_to_leader_ms,
-        tyre_age_laps, tyre_compound, pit_out_lap
+        df has columns: race_id, total_laps, driver_id, lap_number, position,
+        gap_to_leader_ms, tyre_age_laps, tyre_compound, pit_out_lap
         (aggregated per driver per micro-batch; we take latest lap per driver).
         """
         rows = df.collect()
@@ -86,6 +85,10 @@ def make_predict_and_write(
         import requests as req
         from influxdb_client import InfluxDBClient, WritePrecision
         from influxdb_client.client.write_api import SYNCHRONOUS
+
+        # Extract race_id and total_laps from the first row
+        race_id = rows[0]["race_id"] or "unknown"
+        total_laps = rows[0]["total_laps"] or 1
 
         # Build payload for Model API
         drivers_payload = []
@@ -178,8 +181,6 @@ def parse_args():
     p.add_argument("--influxdb-org", default="f1chubby")
     p.add_argument("--influxdb-bucket", default="live_race")
     p.add_argument("--model-api-url", required=True, help="e.g. http://10.0.0.2:8080")
-    p.add_argument("--race-id", required=True, help="e.g. 2026_Australian Grand Prix")
-    p.add_argument("--total-laps", type=int, required=True, help="Total laps in the race")
     p.add_argument("--checkpoint-dir", default="/tmp/spark-checkpoints/slow")
     return p.parse_args()
 
@@ -227,14 +228,14 @@ def main():
         influx_token=args.influxdb_token,
         influx_org=args.influxdb_org,
         influx_bucket=args.influxdb_bucket,
-        race_id=args.race_id,
-        total_laps=args.total_laps,
     )
 
     # Use a 10-second processing trigger — predictions don't need sub-second latency
     query = (
         timing_with_wm
         .select(
+            col("race_id"),
+            col("total_laps"),
             col("driver_id"),
             col("lap_number"),
             col("position"),

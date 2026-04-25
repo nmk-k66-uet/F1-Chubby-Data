@@ -115,8 +115,7 @@ jobs:
             -- \
             --project ${{ env.PROJECT_ID }} \
             --influxdb-url http://${{ secrets.VM_INTERNAL_IP }}:8086 \
-            --influxdb-token ${{ secrets.INFLUXDB_TOKEN }} \
-            --race-id "${{ secrets.RACE_ID }}"
+            --influxdb-token ${{ secrets.INFLUXDB_TOKEN }}
 
       - name: Submit Streaming Slow Path
         if: inputs.job_type == 'streaming-slow' || inputs.job_type == 'all'
@@ -132,6 +131,4 @@ jobs:
             --project ${{ env.PROJECT_ID }} \
             --influxdb-url http://${{ secrets.VM_INTERNAL_IP }}:8086 \
             --influxdb-token ${{ secrets.INFLUXDB_TOKEN }} \
-            --model-api-url http://${{ secrets.VM_INTERNAL_IP }}:8080 \
-            --race-id "${{ secrets.RACE_ID }}" \
-            --total-laps ${{ secrets.TOTAL_LAPS }}
+            --model-api-url http://${{ secrets.VM_INTERNAL_IP }}:8080

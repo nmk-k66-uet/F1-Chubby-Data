@@ -408,6 +408,7 @@ def run_pubsub_mode(args):
                 pass
 
         payload = json_mod.dumps({
+            "race_id": RACE_ID,
             "timestamp_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
             "flag": msg["flag"],
             "scope": "Track",
@@ -436,6 +437,8 @@ def run_pubsub_mode(args):
         futures = []
         for _, row in lap_data.iterrows():
             payload = json_mod.dumps({
+                "race_id": RACE_ID,
+                "total_laps": total_laps,
                 "timestamp_ms": now_ms,
                 "driver_id": str(row["Driver"]),
                 "lap_number": int(lap_num),

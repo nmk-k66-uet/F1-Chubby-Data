@@ -4,12 +4,17 @@
   "description": "Pub/Sub message for f1-race-control topic — flags, penalties, track status.",
   "type": "object",
   "required": [
+    "race_id",
     "timestamp_ms",
     "flag",
     "scope",
     "message"
   ],
   "properties": {
+    "race_id": {
+      "type": "string",
+      "description": "Unique race identifier, e.g. 2026_Australian Grand Prix."
+    },
     "timestamp_ms": {
       "type": "integer",
       "description": "UTC epoch milliseconds."

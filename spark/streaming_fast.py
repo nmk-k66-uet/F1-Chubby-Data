@@ -11,7 +11,7 @@ Submit to Dataproc:
         --properties spark.jars.packages=com.google.cloud:pubsub-spark-connector:1.0.0 \
         --pip-packages 'influxdb-client' \
         -- --project $PROJECT_ID --influxdb-url http://$VM_IP:8086 \
-           --influxdb-token $TOKEN --race-id 2026_Australian_Grand_Prix
+           --influxdb-token $TOKEN
 """
 
 import argparse
@@ -36,6 +36,8 @@ log = logging.getLogger("streaming_fast")
 # ── Pub/Sub JSON schemas ────────────────────────────────────────────────────
 
 TIMING_SCHEMA = StructType([
+    StructField("race_id", StringType()),
+    StructField("total_laps", IntegerType()),
     StructField("timestamp_ms", IntegerType()),
     StructField("driver_id", StringType()),
     StructField("lap_number", IntegerType()),
@@ -65,6 +67,7 @@ TELEMETRY_SCHEMA = StructType([
 ])
 
 RACE_CONTROL_SCHEMA = StructType([
+    StructField("race_id", StringType()),
     StructField("timestamp_ms", IntegerType()),
     StructField("flag", StringType()),
     StructField("scope", StringType()),
@@ -112,14 +115,14 @@ def _escape_tag(v: str) -> str:
     return v.replace(" ", "\\ ").replace(",", "\\,").replace("=", "\\=")
 
 
-def timing_to_line(race_id):
+def timing_to_line():
     """Return a UDF that converts a timing row to InfluxDB line protocol."""
-    _race_id = _escape_tag(race_id)
 
-    def _fn(driver_id, lap_number, position, lap_time_ms, gap_to_leader_ms,
+    def _fn(race_id, driver_id, lap_number, position, lap_time_ms, gap_to_leader_ms,
             interval_ms, tyre_compound, tyre_age_laps, pit_out_lap, timestamp_ms):
-        if driver_id is None:
+        if driver_id is None or race_id is None:
             return None
+        _race_id = _escape_tag(race_id)
         driver = _escape_tag(driver_id)
         compound = tyre_compound or "MEDIUM"
         cidx = COMPOUND_IDX.get(compound, 1)
@@ -142,13 +145,13 @@ def timing_to_line(race_id):
     return udf(_fn, StringType())
 
 
-def race_control_to_line(race_id):
+def race_control_to_line():
     """Return a UDF that converts a race-control row to line protocol."""
-    _race_id = _escape_tag(race_id)
 
-    def _fn(flag, message, timestamp_ms):
-        if message is None:
+    def _fn(race_id, flag, message, timestamp_ms):
+        if message is None or race_id is None:
             return None
+        _race_id = _escape_tag(race_id)
         category = "RaceControl"
         _flag = (flag or "").replace('"', '\\"')
         _msg = (message or "").replace('"', '\\"')
@@ -167,7 +170,6 @@ def parse_args():
     p.add_argument("--influxdb-token", required=True)
     p.add_argument("--influxdb-org", default="f1chubby")
     p.add_argument("--influxdb-bucket", default="live_race")
-    p.add_argument("--race-id", required=True, help="e.g. 2026_Australian Grand Prix")
     p.add_argument("--checkpoint-dir", default="/tmp/spark-checkpoints/fast")
     return p.parse_args()
 
@@ -202,10 +204,10 @@ def main():
         .select("d.*")
     )
 
-    timing_line_udf = timing_to_line(args.race_id)
+    timing_line_udf = timing_to_line()
     timing_lines = timing_parsed.select(
         timing_line_udf(
-            col("driver_id"), col("lap_number"), col("position"),
+            col("race_id"), col("driver_id"), col("lap_number"), col("position"),
             col("lap_time_ms"), col("gap_to_leader_ms"), col("interval_ms"),
             col("tyre_compound"), col("tyre_age_laps"), col("pit_out_lap"),
             col("timestamp_ms"),
@@ -236,10 +238,10 @@ def main():
         .select("d.*")
     )
 
-    rc_line_udf = race_control_to_line(args.race_id)
+    rc_line_udf = race_control_to_line()
     rc_lines = rc_parsed.select(
         rc_line_udf(
-            col("flag"), col("message"), col("timestamp_ms"),
+            col("race_id"), col("flag"), col("message"), col("timestamp_ms"),
         ).alias("line_protocol")
     )
 
