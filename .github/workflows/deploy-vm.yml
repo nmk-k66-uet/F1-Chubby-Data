@@ -44,6 +44,12 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
+      - name: Verify gcloud auth
+        run: |
+          gcloud auth list
+          gcloud config list account
+          gcloud projects describe "${{ env.PROJECT_ID }}" >/dev/null
+
       - name: Copy app files to VM
         run: |
           # Copy core app files
