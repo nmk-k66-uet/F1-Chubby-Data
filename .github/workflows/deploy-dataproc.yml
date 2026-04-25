@@ -40,9 +40,11 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Upload Spark jobs to GCS
+      - name: Upload Spark jobs and dependencies to GCS
         run: |
           gsutil cp spark/*.py gs://${{ env.STAGING_BUCKET }}/spark/
+          zip -r core_dependencies.zip core/
+          gsutil cp core_dependencies.zip gs://${{ env.STAGING_BUCKET }}/spark/
 
       - name: Ensure Dataproc cluster is RUNNING
         run: |
@@ -51,34 +53,19 @@ jobs:
             --project ${{ env.PROJECT_ID }} \
             --format='value(status.state)' 2>/dev/null || echo "NOT_FOUND")
 
-          echo "Cluster state: $CLUSTER_STATE"
-
-          if [ "$CLUSTER_STATE" = "RUNNING" ]; then
-            echo "Cluster ${{ env.CLUSTER_NAME }} is RUNNING — skipping creation."
-          else
-            if [ "$CLUSTER_STATE" != "NOT_FOUND" ]; then
-              echo "Cluster is in state $CLUSTER_STATE — deleting first…"
-              gcloud dataproc clusters delete ${{ env.CLUSTER_NAME }} \
-                --region ${{ env.REGION }} \
-                --project ${{ env.PROJECT_ID }} \
-                --quiet
-            fi
-            echo "Creating cluster ${{ env.CLUSTER_NAME }} …"
-            gcloud dataproc clusters create ${{ env.CLUSTER_NAME }} \
-              --region ${{ env.REGION }} \
-              --zone ${{ env.REGION }}-a \
-              --single-node \
-              --master-machine-type n1-standard-4 \
-              --master-boot-disk-size 50GB \
-              --image-version 2.1-debian11 \
-              --max-idle 600s \
-              --project ${{ env.PROJECT_ID }} \
-              --bucket ${{ env.STAGING_BUCKET }} \
-              --subnet projects/${{ env.PROJECT_ID }}/regions/${{ env.REGION }}/subnetworks/f1-chubby-vpc-subnet \
-              --service-account f1-dataproc-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com \
-              --metadata 'PIP_PACKAGES=influxdb-client requests' \
-              --initialization-actions gs://goog-dataproc-initialization-actions-${{ env.REGION }}/python/pip-install.sh
-          fi
+      - name: Create Dataproc cluster
+        run: |
+          gcloud dataproc clusters create ${{ env.CLUSTER_NAME }} \
+            --region ${{ env.REGION }} \
+            --single-node \
+            --master-machine-type n1-standard-4 \
+            --master-boot-disk-size 50GB \
+            --image-version 2.1-debian11 \
+            --initialization-actions gs://goog-dataproc-initialization-actions-${{ env.REGION }}/python/pip-install.sh \
+            --metadata PIP_PACKAGES="fastf1 psycopg2-binary numpy<2" \
+            --max-idle 600s \
+            --project ${{ env.PROJECT_ID }} \
+            --bucket ${{ env.STAGING_BUCKET }}
 
       - name: Submit ETL Job
         if: inputs.job_type == 'etl' || inputs.job_type == 'all'
@@ -88,7 +75,8 @@ jobs:
             --cluster ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
-            --jars gs://spark-lib/postgres/postgresql-42.7.3.jar
+            --jars gs://spark-lib/postgres/postgresql-42.7.3.jar \
+            --py-files gs://${{ env.STAGING_BUCKET }}/spark/core_dependencies.zip
 
       - name: Submit Model Training Job
         if: inputs.job_type == 'training' || inputs.job_type == 'all'
@@ -97,7 +85,8 @@ jobs:
             gs://${{ env.STAGING_BUCKET }}/spark/training_pipeline.py \
             --cluster ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }} \
-            --project ${{ env.PROJECT_ID }}
+            --project ${{ env.PROJECT_ID }} \
+            --py-files gs://${{ env.STAGING_BUCKET }}/spark/core_dependencies.zip
 
       - name: Submit Streaming Fast Path
         if: inputs.job_type == 'streaming-fast' || inputs.job_type == 'all'

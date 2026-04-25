@@ -242,3 +242,6 @@ terraform.rc
 
 
 gcs-key/key-gcs.json
+gcs-key/*
+f1_cache_*
+local_test_output/*
