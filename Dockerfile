@@ -16,7 +16,6 @@ COPY core/ core/
 COPY components/ components/
 COPY pages/ pages/
 COPY assets/ assets/
-COPY sql/ sql/
 
 ENV MODEL_API_URL=http://model-api:8080
 ENV INFLUXDB_URL=http://influxdb:8086

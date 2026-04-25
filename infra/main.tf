@@ -133,7 +133,7 @@ resource "google_service_account_iam_member" "github_actions_use_dataproc_sa" {
 
 resource "google_iam_workload_identity_pool" "github" {
   project                   = var.project_id
-  workload_identity_pool_id = "github-actions"
+  workload_identity_pool_id = "github-actions-v2"
   display_name              = "GitHub Actions"
 
   depends_on = [google_project_service.apis]
