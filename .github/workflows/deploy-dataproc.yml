@@ -68,7 +68,6 @@ jobs:
             echo "Creating cluster ${{ env.CLUSTER_NAME }} …"
             gcloud dataproc clusters create ${{ env.CLUSTER_NAME }} \
               --region ${{ env.REGION }} \
-              --zone ${{ env.REGION }}-c \
               --single-node \
               --master-machine-type e2-standard-4 \
               --master-boot-disk-size 50GB \
