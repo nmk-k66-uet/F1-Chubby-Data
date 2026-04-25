@@ -47,7 +47,7 @@ services:
       GCS_CACHE_BUCKET: ${GCS_CACHE_BUCKET:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     volumes:
-      - ./f1_cache:/app/f1_cache
+      - f1-cache:/app/f1_cache
     depends_on:
       - model-api
       - influxdb
@@ -56,3 +56,4 @@ services:
 volumes:
   influxdb-data:
   model-cache:
+  f1-cache:

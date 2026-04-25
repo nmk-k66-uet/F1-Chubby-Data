@@ -3,9 +3,12 @@ import pandas as pd
 import json
 import os
 import time
+import logging
 import streamlit.components.v1 as components
 
 from core.data_loader import gcs, get_blob
+
+logger = logging.getLogger(__name__)
 
 GCS_CACHE_BUCKET = os.environ.get("GCS_CACHE_BUCKET", "f1chubby-cache")
 CACHE_DIR = 'f1_cache'
@@ -79,27 +82,56 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path, blob):
         # Finish Line Position
         payload["finish_line"] = [float(ref_tel['X'].iloc[0]), float(ref_tel['Y'].iloc[0])]
         
-        # Start Line Position
+        # Start Line Position — try lap 1 telemetry, fall back to finish line
+        start_found = False
         try:
-            lap1 = session.laps[session.laps['LapNumber'] == 1].iloc[0]
-            lap1_tel = lap1.get_telemetry()
-            payload["start_line"] = [float(lap1_tel['X'].iloc[0]), float(lap1_tel['Y'].iloc[0])]
-        except: pass
+            lap1_laps = session.laps[session.laps['LapNumber'] == 1].dropna(subset=['LapTime'])
+            if not lap1_laps.empty:
+                lap1_tel = lap1_laps.iloc[0].get_telemetry()
+                if lap1_tel is not None and not lap1_tel.empty:
+                    payload["start_line"] = [float(lap1_tel['X'].iloc[0]), float(lap1_tel['Y'].iloc[0])]
+                    start_found = True
+        except Exception:
+            pass
+        if not start_found:
+            payload["start_line"] = payload["finish_line"]
 
-        # Corners Vector
+        # Corners Vector — use track-local normal for reliable outward offset
         circuit_info = session.get_circuit_info()
         corners_data = []
         if circuit_info is not None and hasattr(circuit_info, 'corners'):
             center_x = (payload["min_x"] + payload["max_x"]) / 2
             center_y = (payload["min_y"] + payload["max_y"]) / 2
+            track_pts = payload["track_path"]  # list of [x, y]
             
             for _, row in circuit_info.corners.iterrows():
                 cx = float(row['X']); cy = float(row['Y'])
-                vx = cx - center_x; vy = cy - center_y
-                mag = (vx**2 + vy**2)**0.5
+                
+                # Find nearest track point
+                best_idx, best_dist = 0, float('inf')
+                for i, pt in enumerate(track_pts):
+                    d = (pt[0] - cx)**2 + (pt[1] - cy)**2
+                    if d < best_dist:
+                        best_dist = d
+                        best_idx = i
+                
+                # Track tangent at nearest point
+                i_prev = (best_idx - 1) % len(track_pts)
+                i_next = (best_idx + 1) % len(track_pts)
+                tx = track_pts[i_next][0] - track_pts[i_prev][0]
+                ty = track_pts[i_next][1] - track_pts[i_prev][1]
+                
+                # Perpendicular (two choices: (-ty, tx) or (ty, -tx))
+                # Pick the one pointing away from track center
+                nx, ny = -ty, tx
+                dot_center = nx * (cx - center_x) + ny * (cy - center_y)
+                if dot_center < 0:
+                    nx, ny = ty, -tx
+                
+                mag = (nx**2 + ny**2)**0.5
                 if mag == 0: mag = 1
                 corners_data.append({
-                    "x": cx, "y": cy, "nx": vx/mag, "ny": vy/mag, "number": str(row.get('Number', ''))
+                    "x": cx, "y": cy, "nx": nx/mag, "ny": ny/mag, "number": str(row.get('Number', ''))
                 })
         payload["corners"] = corners_data
         
@@ -198,10 +230,11 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path, blob):
     with open(cache_path, 'w', encoding='utf-8') as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
-    file_name = cache_path.split("\\")[-1]
-    gcs.upload_file(GCS_CACHE_BUCKET, blob_destination=blob + "/" + file_name, file_path=cache_path, content_type = "application/json")
-
-    os.remove(cache_path)
+    try:
+        file_name = cache_path.split("\\")[-1]
+        gcs.upload_file(GCS_CACHE_BUCKET, blob_destination=blob + "/" + file_name, file_path=cache_path, content_type = "application/json")
+    except Exception as e:
+        logger.warning("Failed to upload replay JSON to GCS: %s", e)
         
     st.session_state['js_payload'] = payload
     st.session_state['replay_session_id'] = cache_path
@@ -221,25 +254,28 @@ def fragment_replay_continuous(session, year, round_num, session_code):
         return
 
     cache_filename = f"replay_{year}_{round_num}_{session_code}.json"
-    cache_path = os.path.join(CACHE_DIR, cache_filename)
     blob = get_blob(year, round_num, session_code)
-    blob_file = os.path.join(blob, cache_filename).replace("\\", "/")
+    cache_path = os.path.join(CACHE_DIR, blob, cache_filename)
+    blob_file = (blob + "/" + cache_filename).replace("\\", "/")
 
-    is_exits = False
-    for sub_blob in gcs.list_blobs(bucket_name=GCS_CACHE_BUCKET):
-        if blob_file == sub_blob.name:
-            is_exits = True
-            break
+    is_exits = gcs.check_blob_exists(GCS_CACHE_BUCKET, blob_file)
 
     if 'js_payload' not in st.session_state or st.session_state.get('replay_session_id') != cache_path:
-        if is_exits:
-            gcs.download_one_file(GCS_CACHE_BUCKET, blob_file, cache_path)
-
-            with st.spinner("Loading Replay package from local cache..."):
+        # 1. Try local file first
+        if os.path.isfile(cache_path):
+            with st.spinner("Loading Replay from local cache..."):
                 with open(cache_path, 'r', encoding='utf-8') as f:
                     st.session_state['js_payload'] = json.load(f)
                 st.session_state['replay_session_id'] = cache_path
-            os.remove(cache_path)
+        # 2. Try GCS
+        elif is_exits:
+            gcs.download_one_file(GCS_CACHE_BUCKET, blob_file, cache_path)
+
+            with st.spinner("Loading Replay package from GCS cache..."):
+                with open(cache_path, 'r', encoding='utf-8') as f:
+                    st.session_state['js_payload'] = json.load(f)
+                st.session_state['replay_session_id'] = cache_path
+        # 3. Not cached anywhere
         else:
             st.info("Replay data is not cached yet. Generating it requires processing all telemetry points for 20 cars.")
             if st.button("Load & Generate Replay Data", type="primary"):
