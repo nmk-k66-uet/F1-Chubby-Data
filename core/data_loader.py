@@ -13,6 +13,7 @@ import fastf1
 import pandas as pd
 import os
 import logging
+import threading
 
 from google.cloud import storage
 
@@ -163,9 +164,9 @@ def load(year, round_num, session_type, telemetry, weather, messages):
     session = fastf1.get_session(year, round_num, session_type)
     session.load(telemetry=telemetry, weather=weather, messages=messages)
 
-    # 4. If we fetched fresh from API, push to GCS cache for next time
+    # 4. If we fetched fresh from API, push to GCS cache in background
     if not had_local:
-        _push_local_to_gcs(blob)
+        threading.Thread(target=_push_local_to_gcs, args=(blob,), daemon=True).start()
 
     return session
 
