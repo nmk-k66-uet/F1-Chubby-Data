@@ -6,9 +6,34 @@ Step-by-step guide to deploy the full F1-Chubby-Data system on Google Cloud Plat
 
 - GCP project with billing enabled
 - [Terraform >= 1.5](https://developer.hashicorp.com/terraform/install) installed
-- [Terraform Cloud](https://app.terraform.io) account (free tier)
 - [gcloud CLI](https://cloud.google.com/sdk/docs/install) installed and authenticated
 - GitHub repository with Actions enabled
+
+---
+
+## Step 0: Bootstrap GCP Project
+
+On a fresh GCP project, enable the minimum APIs that Terraform and the GCS backend need:
+
+```bash
+gcloud services enable \
+  cloudresourcemanager.googleapis.com \
+  storage.googleapis.com \
+  --project=gen-lang-client-0314607994
+```
+
+Then create the Terraform state bucket (once, before first `terraform init`):
+
+```bash
+gcloud storage buckets create gs://f1chubby-tfstate-gen-lang-client-0314607994 \
+  --location=asia-southeast1 \
+  --uniform-bucket-level-access \
+  --public-access-prevention
+
+# Enable versioning to protect state history
+gcloud storage buckets update gs://f1chubby-tfstate-gen-lang-client-0314607994 \
+  --versioning
+```
 
 ---
 
@@ -16,13 +41,27 @@ Step-by-step guide to deploy the full F1-Chubby-Data system on Google Cloud Plat
 
 All GCP resources are managed by Terraform in the `infra/` directory.
 
+First, update `infra/terraform.tfvars` with your own values:
+
+```hcl
+project_id  = "<YOUR_PROJECT_ID>"
+region      = "asia-southeast1"
+zone        = "asia-southeast1-b"
+github_repo = "<YOUR_GITHUB_ORG>/<YOUR_REPO_NAME>"
+```
+
+Then run:
+
 ```bash
 cd infra
 
-# Login to Terraform Cloud
-terraform login
+# Authenticate to GCP
+gcloud auth application-default login
 
-# Initialize (downloads providers, connects to TFC backend)
+# Set quota project (required by apikeys.googleapis.com)
+gcloud auth application-default set-quota-project <YOUR_PROJECT_ID>
+
+# Initialize (downloads providers, connects to GCS backend)
 terraform init
 
 # Review what will be created
@@ -41,7 +80,7 @@ terraform output
 |--------|-----------|
 | **networking** | VPC `f1-chubby-vpc`, subnet, firewall rules (SSH, ports 80/8080/8086, internal) |
 | **pubsub** | 2 topics (`f1-timing`, `f1-race-control`) × 2 subscriptions each (fast/slow) |
-| **storage** | 3 GCS buckets: `f1chubby-cache-*`, `f1chubby-model-*`, `f1chubby-replay-*` |
+| **storage** | 3 GCS buckets: `f1chubby-raw-*`, `f1chubby-model-*`, `f1chubby-cache-*` |
 
 | **compute** | GCE VM `f1-chubby-vm` (e2-medium, Container-Optimized OS) + static IP + service account |
 | **dataproc** | API enablement + staging bucket (clusters created on-demand) |
@@ -72,50 +111,28 @@ Go to your GitHub repo → **Settings** → **Secrets and variables** → **Acti
 
 ---
 
-## Step 3: Configure VM Environment
+## Step 3: Upload FastF1 Cache (Optional)
 
-SSH into the VM and create the production `.env` file:
-
-```bash
-gcloud compute ssh f1-chubby-vm --zone asia-southeast1-b
-
-# Create the env file (referenced by deploy-vm.yml workflow)
-sudo mkdir -p /opt/f1chubby
-sudo tee /opt/f1chubby/.env << 'EOF'
-# InfluxDB
-INFLUXDB_TOKEN=f1chubby-influx-token
-INFLUXDB_PASSWORD=<CHANGE_THIS>
-
-# Model Serving
-USE_GCS=true
-GCS_MODELS_BUCKET=f1chubby-model-gen-lang-client-0314607994
-
-# Streamlit
-GCS_BUCKET=f1chubby-cache-gen-lang-client-0314607994
-LOCAL_MODE=false
-
-# Gemini (optional — for AI tactical briefing)
-GEMINI_API_KEY=<YOUR_GEMINI_API_KEY>
-EOF
-```
-
----
-
-## Step 4: Upload Data Assets
-
-Upload data assets manually using `gsutil`:
+Upload the local FastF1 cache to GCS so the training pipeline and Streamlit can skip re-downloading from the FastF1 API:
 
 ```bash
-# Upload FastF1 cache to GCS
+# Upload FastF1 cache to GCS (speeds up Dataproc training and Streamlit startup)
 gsutil -m cp -r f1_cache/* gs://f1chubby-cache-gen-lang-client-0314607994/
+```
 
-# Upload trained model artifacts
-gsutil -m cp assets/Models/*.pkl gs://f1chubby-model-gen-lang-client-0314607994/
+Alternatively, download the pre-collected raw dataset from our assignment group and upload it directly:
+
+```bash
+# Download raw data archive
+# Link: <TODO: add link>
+
+# Upload to the raw bucket
+gsutil -m cp -r <extracted_folder>/* gs://f1chubby-raw-gen-lang-client-0314607994/
 ```
 
 ---
 
-## Step 5: Deploy Application
+## Step 4: Deploy Application
 
 ### Automatic (recommended)
 
@@ -142,7 +159,7 @@ sudo docker compose up -d --build --remove-orphans
 
 ---
 
-## Step 6: Train / Retrain Models
+## Step 5: Train / Retrain Models
 
 Trigger the `deploy-dataproc.yml` workflow:
 1. Go to **Actions** → **Deploy Dataproc Jobs** → **Run workflow**
@@ -158,7 +175,7 @@ gcloud compute ssh f1-chubby-vm --zone asia-southeast1-b -- \
 
 ---
 
-## Step 7: Run Live Demo
+## Step 6: Run Live Demo
 
 1. **Ensure VM is running:**
    ```bash
@@ -176,7 +193,7 @@ gcloud compute ssh f1-chubby-vm --zone asia-southeast1-b -- \
    python scripts/simulate_race_to_influxdb.py --speed 3
    ```
 
-4. **Open dashboard:** `http://<VM_EXTERNAL_IP>` (or `http://f1.thedblaster.id.vn` if DNS is configured)
+4. **Open dashboard:** `http://<VM_EXTERNAL_IP>` (or `http://<YOUR_DOMAIN>` if DNS is configured)
 
 5. Navigate to a race → **Live Race** tab to see real-time timing tower and ML predictions updating.
 
@@ -207,8 +224,9 @@ Four GitHub Actions workflows automate the deployment lifecycle:
 ### terraform.yml — Infrastructure Changes
 
 - **Trigger:** Push to `main` or PR touching `infra/**`
-- **What it does:** On PR → `terraform plan` (comment on PR). On merge → `terraform apply` via Terraform Cloud
-- **Auth:** Terraform Cloud OIDC to GCP (separate from GitHub Actions WIF)
+- **What it does:** On PR → `terraform plan` (comment on PR). On merge → `terraform apply`
+- **Auth:** GitHub Actions WIF → GCP (same `WIF_PROVIDER` / `WIF_SA_EMAIL` as other workflows)
+- **State:** GCS bucket `f1chubby-tfstate-gen-lang-client-0314607994`
 
 ---
 
