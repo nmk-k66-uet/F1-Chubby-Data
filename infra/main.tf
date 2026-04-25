@@ -92,7 +92,7 @@ module "compute" {
   subnet_id         = module.networking.subnet_id
   gemini_api_key    = google_apikeys_key.gemini.key_string
   gcs_cache_bucket  = "f1chubby-cache-${var.project_id}"
-  gcs_models_bucket = "f1chubby-models-${var.project_id}"
+  gcs_models_bucket = "f1chubby-model-${var.project_id}"
 
   depends_on = [google_project_service.apis]
 }
@@ -107,6 +107,38 @@ module "dataproc" {
   staging_bucket = "f1chubby-dataproc-staging"
 
   depends_on = [google_project_service.apis]
+}
+
+# --- Dataproc Service Account ---
+
+resource "google_service_account" "dataproc" {
+  project      = var.project_id
+  account_id   = "f1-dataproc-sa"
+  display_name = "F1 Dataproc Service Account"
+}
+
+locals {
+  dataproc_sa_roles = [
+    "roles/dataproc.worker",
+    "roles/pubsub.subscriber",
+    "roles/pubsub.publisher",
+    "roles/storage.objectViewer",
+  ]
+}
+
+resource "google_project_iam_member" "dataproc_roles" {
+  for_each = toset(local.dataproc_sa_roles)
+
+  project = var.project_id
+  role    = each.value
+  member  = "serviceAccount:${google_service_account.dataproc.email}"
+}
+
+# GitHub Actions SA needs to impersonate Dataproc SA (to create clusters with it)
+resource "google_service_account_iam_member" "github_actions_use_dataproc_sa" {
+  service_account_id = google_service_account.dataproc.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.github_actions.email}"
 }
 
 # --- Workload Identity Federation for GitHub Actions ---

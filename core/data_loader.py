@@ -37,7 +37,11 @@ class GCStorage:
     def get_bucket(self, bucket_name):
         return self.client.get_bucket(bucket_name)
 
-    def upload_file(self, bucket_name, blob_destination, file_path):
+    def list_buckets(self):
+        buckets = self.client.list_buckets()
+        return [bucket.name for bucket in buckets]
+
+    def upload_file(self, bucket_name, blob_destination, file_path, content_type = "application/octet-stream"):
         logger.info("Upload %s to GCS", file_path)
         bucket = self.get_bucket(bucket_name)
         blob = bucket.blob(blob_destination)
@@ -60,6 +64,14 @@ class GCStorage:
             if not os.path.exists(dest):
                 logger.info("Download %s from GCS", blob.name)
                 blob.download_to_filename(dest)
+
+    def download_one_file(self, bucket_name, blob_file, destination_file):
+        blobs = self.list_blobs(bucket_name)
+
+        for blob in blobs:
+            if blob_file in blob.name:
+                print(f"Download {blob.name} from GCS!")
+                blob.download_to_filename(destination_file)
 
 
 gcs = GCStorage()

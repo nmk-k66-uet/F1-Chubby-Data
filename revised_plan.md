@@ -38,7 +38,7 @@ flowchart LR
     subgraph Serving
         PG[(Cloud SQL<br/>PostgreSQL)]
         INFLUX[(InfluxDB<br/>Live)]
-        MLAPI[Model Serving API]
+        MLAPI["Model Serving API<br/>(stateless inference only)"]
     end
 
     subgraph "GCE VM (docker-compose)"
@@ -54,11 +54,15 @@ flowchart LR
     GCS --> SPARK_TRAIN -->|model artifact| GCS
 
     PUBSUB --> FAST --> INFLUX
-    PUBSUB --> SLOW --> MLAPI --> INFLUX
+    PUBSUB --> SLOW -->|features| MLAPI
+    SLOW -->|predictions| INFLUX
 
     GCS -->|load model| MLAPI
     GCS -->|FastF1 cache + SDK| UI
     INFLUX --> UI
+
+    style MLAPI fill:#e8f5e9,stroke:#2e7d32
+    linkStyle 6 stroke:#2e7d32,stroke-dasharray:5
 ```
 
 ### Batch Processing Detail
@@ -80,7 +84,7 @@ flowchart TD
         GCS_T[Cloud Storage<br/>gs://f1chubby-raw/] --> FEAT[Feature Engineering<br/>GridPos, QualDelta, PaceDelta,<br/>DriverForm, TeamTier]
         FEAT --> PRE_MODEL[Pre-Race Model Training<br/>RandomForest Classifier<br/>Target: Podium Probability]
         FEAT --> IN_MODEL[In-Race Model Training<br/>RandomForest Regressor<br/>Target: Finishing Position]
-        PRE_MODEL -->|pre_race_model.pkl| GCS_OUT[GCS gs://f1chubby-models/]
+        PRE_MODEL -->|pre_race_model.pkl| GCS_OUT[GCS gs://f1chubby-model/]
         IN_MODEL -->|in_race_model.pkl| GCS_OUT
     end
 ```
@@ -101,10 +105,10 @@ flowchart TD
         F_WRITE[Write to InfluxDB<br/>Sub-second latency]
     end
 
-    subgraph SP ["Slow Path | subscription: *-pred-slow"]
-        S_WINDOW[Windowed Feature<br/>Computation<br/>5-10 sec windows]
-        S_CALL[Call Model Serving API<br/>POST /predict]
-        S_WRITE[Write to InfluxDB<br/>predictions bucket]
+    subgraph SP ["Slow Path | subscription: f1-timing-pred-slow"]
+        S_WINDOW[Windowed Feature<br/>Computation<br/>10 sec trigger]
+        S_CALL["Call Model Serving API<br/>POST /predict-inrace<br/>(stateless — returns predictions)"]
+        S_WRITE[Spark writes predictions<br/>to InfluxDB]
     end
 
     T1 & T2 & T3 --> F_PARSE --> F_ENRICH --> F_WRITE
@@ -198,7 +202,7 @@ flowchart LR
 - **Role:** Durable store for raw historical data, model artifacts, and replay cache.
 - **Buckets:**
   - `f1chubby-raw/` — Raw session data and FastF1 cache, partitioned by `{year}/{round}/{session}/`. Also serves as the primary historical data source for the Streamlit dashboard (via `GCStorage` class in `core/data_loader.py` with bidirectional caching: downloads from GCS if available, falls back to FastF1, uploads new cache back to GCS, then cleans up the local copy).
-  - `f1chubby-models/` — Trained model artifacts (`pre_race_model.pkl`, `in_race_model.pkl`).
+  - `f1chubby-model/` — Trained model artifacts (`pre_race_model.pkl`, `in_race_model.pkl`).
 - **Storage class:** Standard, single region (`asia-southeast1`).
 
 #### Cloud Pub/Sub
@@ -257,16 +261,16 @@ flowchart TD
 
 #### Model Serving API — Inference Endpoint
 
-- **Role:** Decoupled inference service that loads trained models and exposes a REST prediction endpoint. The Spark Streaming slow path computes features and calls this API instead of running inference inline.
+- **Role:** Stateless inference service that loads trained models and exposes a REST prediction endpoint. It receives features and returns predictions — it does **not** write to InfluxDB. The Spark Streaming slow path calls this API, receives predictions, and writes them to InfluxDB itself.
 - **Deployment:** Containerized on the GCE VM (shared with InfluxDB + Streamlit) via docker-compose.
-- **Technology:** FastAPI + joblib (implemented in `model_serving/app.py`). Downloads models from GCS bucket (`gs://f1chubby-models-<PROJECT_ID>/`) on startup, caches in a Docker named volume.
+- **Technology:** FastAPI + joblib (implemented in `model_serving/app.py`). Downloads models from GCS bucket (`gs://f1chubby-model-<PROJECT_ID>/`) on startup, caches in a Docker named volume.
 - **Current Status:** ✅ Running as `f1-model-api` container on VM. Models pulled from GCS on startup (3 artifacts: `podium_model.pkl`, `in_race_win_model.pkl`, `in_race_podium_model.pkl`). Endpoints: `POST /predict-inrace`, `POST /predict-prerace`, `GET /health`. Returns normalized probabilities.
 - **Why decoupled serving:
   - Model can be **updated without restarting** the Spark Streaming job (hot-swap model versions).
   - Shows **separation of concerns** — feature computation (Spark) vs. model inference (API) are independent.
   - The serving layer is a standard production ML pattern (grading differentiator).
   - Adds a testable component with its own health check and latency metrics for the pipeline health panel.
-- **Model loading:** Loads model artifacts from GCS (`gs://f1chubby-models/`) on startup and on-demand refresh.
+- **Model loading:** Loads model artifacts from GCS (`gs://f1chubby-model/`) on startup and on-demand refresh.
 
 - **Interface Contract:**
 
@@ -360,8 +364,8 @@ flowchart TD
 - **Role:** Reads raw historical data from GCS, engineers ML features, trains both models, and uploads serialized artifacts to GCS.
 - **Jobs:**
   1. **Feature Engineering** — Compute features: grid position, qualifying delta, FP2/Sprint pace delta, driver form, team tier, tyre strategy metrics (pre-race); lap-by-lap state snapshots (in-race).
-  2. **Pre-Race Model Training** — scikit-learn RandomForest classifier on engineered features. Save to GCS (`gs://f1chubby-models/pre_race_model.pkl`).
-  3. **In-Race Model Training** — Trained on historical in-race snapshots (lap-by-lap state → final result). Save to GCS (`gs://f1chubby-models/in_race_model.pkl`).
+  2. **Pre-Race Model Training** — scikit-learn RandomForest classifier on engineered features. Save to GCS (`gs://f1chubby-model/pre_race_model.pkl`).
+  3. **In-Race Model Training** — Trained on historical in-race snapshots (lap-by-lap state → final result). Save to GCS (`gs://f1chubby-model/in_race_model.pkl`).
 - **Platform:** GCP Dataproc, single-node cluster (n1-standard-4), auto-delete after job completes.
 - **Independence:** Does not write to PostgreSQL. Can run in parallel with the ETL pipeline.
 
@@ -376,11 +380,11 @@ flowchart TD
 
 #### Spark Streaming — Slow Path
 
-- **Role:** Consumes live data, computes windowed features, calls the Model Serving API for inference, writes predictions to InfluxDB.
-- **Input:** Same Pub/Sub topics (separate subscriptions: `*-pred-slow`).
-- **Processing:** Windowed feature computation → HTTP POST to Model Serving API `/predict` → write response to InfluxDB.
+- **Role:** Consumes timing data, calls the Model Serving API for inference, and writes predictions to InfluxDB. The Model API is stateless — it returns predictions but does not write to any database.
+- **Input:** `f1-timing` topic (subscription: `f1-timing-pred-slow`).
+- **Processing:** Collect per-driver features → HTTP POST to Model Serving API `/predict-inrace` → receive predictions → write to InfluxDB.
 - **Output:** InfluxDB `predictions` with prediction freshness timestamp.
-- **Latency:** 5–10 second windows.
+- **Latency:** 10 second processing trigger.
 - **Failure isolation:** If prediction lags or crashes, live visualization is completely unaffected.
 
 ##### Why Two Separate Streaming Jobs
@@ -763,7 +767,7 @@ flowchart TD
     end
 
     subgraph "Stream A' — Model Training (Long)"
-        AT1[2.1b Spark Training] -->|trained model .pkl| AT2[GCS gs://f1chubby-models/]
+        AT1[2.1b Spark Training] -->|trained model .pkl| AT2[GCS gs://f1chubby-model/]
     end
 
     subgraph "Stream B — Streaming + Simulation (Thanh)"

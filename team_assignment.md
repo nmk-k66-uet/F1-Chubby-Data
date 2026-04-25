@@ -13,7 +13,7 @@ A working end-to-end demo:
 2. **Spark Model Training** reads raw data from GCS → engineers features → trains pre-race + in-race models → uploads `.pkl` artifacts to GCS
 3. **Simulation Service** replays a cached race into Pub/Sub at 5× speed
 4. **Spark Streaming Fast Path** consumes Pub/Sub → writes live_positions, live_timing, live_race_control to InfluxDB (sub-second)
-5. **Spark Streaming Slow Path** consumes Pub/Sub → computes windowed features → calls Model Serving API → writes predictions to InfluxDB (5–10 sec)
+5. **Spark Streaming Slow Path** consumes Pub/Sub → collects features → calls Model Serving API (stateless inference) → Spark writes predictions to InfluxDB (10 sec trigger)
 6. **Streamlit Dashboard** shows historical views from PostgreSQL, live race panels from InfluxDB, and pre-race predictions from Model API
 7. **Key demo moment:** kill slow-path job → live visualization continues uninterrupted
 
@@ -49,10 +49,10 @@ A working end-to-end demo:
 
 - [ ] `spark/etl_pipeline.py` — Spark ETL job (GCS → PG) — **kept in design for presentation only, data pre-seeded**
 - [ ] `spark/training_pipeline.py` — Spark Model Training job (GCS → features → train → .pkl → GCS)
-- [ ] `spark/streaming_fast.py` — Spark Streaming fast path (Pub/Sub → InfluxDB live measurements)
-- [ ] `spark/streaming_slow.py` — Spark Streaming slow path (Pub/Sub → features → Model API → InfluxDB predictions)
-- [ ] Simulation Service — replay cached race into Pub/Sub
-- [ ] Pub/Sub message schemas (`/schemas/`)
+- [x] `spark/streaming_fast.py` — Spark Streaming fast path (Pub/Sub → InfluxDB live measurements)
+- [x] `spark/streaming_slow.py` — Spark Streaming slow path (Pub/Sub → features → Model API (stateless) → Spark writes predictions to InfluxDB)
+- [x] Simulation Service — replay cached race into InfluxDB or Pub/Sub (`scripts/simulate_race_to_influxdb.py --pubsub`)
+- [x] Pub/Sub message schemas (`schemas/timing.json`, `schemas/telemetry.json`, `schemas/race_control.json`)
 - [ ] Streamlit live race panels: live_positions reader, live_timing reader, live_race_control reader
 - [ ] Streamlit pipeline health panel (simplified — Model API health, InfluxDB freshness, Pub/Sub backlog)
 - [ ] Slides
@@ -129,12 +129,12 @@ Write `spark/training_pipeline.py` — reads raw data from GCS, engineers featur
 - Feature Engineering: GridPosition, QualifyingDelta, FP2_PaceDelta, DriverForm, TeamTier (pre-race); lap-by-lap snapshots (in-race)
 - Train pre-race RandomForest classifier → `pre_race_model.pkl`
 - Train in-race RandomForest regressor → `in_race_model.pkl`, `in_race_podium_model.pkl`
-- Upload `.pkl` artifacts to `gs://f1chubby-models/`
+- Upload `.pkl` artifacts to `gs://f1chubby-model/`
 - Reference: existing training logic in `core/ml_core.py` (adapt for Spark scale)
 
 **Done when:**
 - [ ] Job completes on Dataproc (exit code 0)
-- [ ] `gsutil ls gs://f1chubby-models/` shows all model files
+- [ ] `gsutil ls gs://f1chubby-model/` shows all model files
 - [ ] Models loadable via `joblib.load()` and callable with feature dicts
 - [ ] Pre-race accuracy >50%, In-race MAE <3 positions
 
@@ -468,7 +468,7 @@ cp .env.dev.example .env
 | **VM** | `f1-chubby-vm` (e2-medium, static IP) |
 | **Cloud SQL** | `f1-chubby-postgres` (db-f1-micro, db=`f1chubby`, user=`f1admin`) |
 | **GCS Raw Data** | `gs://f1chubby-raw-gen-lang-client-0314607994/` |
-| **GCS Models** | `gs://f1chubby-models-gen-lang-client-0314607994/` |
+| **GCS Models** | `gs://f1chubby-model-gen-lang-client-0314607994/` |
 | **GCS Replay** | `gs://f1chubby-replay-gen-lang-client-0314607994/` |
 | **GCS Dataproc Staging** | `gs://f1chubby-dataproc-staging-gen-lang-client-0314607994/` |
 | **Pub/Sub Topics** | `f1-telemetry`, `f1-timing`, `f1-race-control` |
@@ -522,7 +522,7 @@ print('Model loaded, features:', model.n_features_in_)
 
 # 5. Upload models to GCS manually (for testing):
 gsutil cp assets/Models/*.pkl \
-  gs://f1chubby-models-gen-lang-client-0314607994/
+  gs://f1chubby-model-gen-lang-client-0314607994/
 ```
 
 #### Deploy to Dataproc

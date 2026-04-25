@@ -46,12 +46,12 @@ jobs:
           zip -r core_dependencies.zip core/
           gsutil cp core_dependencies.zip gs://${{ env.STAGING_BUCKET }}/spark/
 
-      - name: Delete stale cluster if exists
+      - name: Ensure Dataproc cluster is RUNNING
         run: |
-          gcloud dataproc clusters delete ${{ env.CLUSTER_NAME }} \
+          CLUSTER_STATE=$(gcloud dataproc clusters describe ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
-            --quiet || true
+            --format='value(status.state)' 2>/dev/null || echo "NOT_FOUND")
 
       - name: Create Dataproc cluster
         run: |
@@ -96,8 +96,13 @@ jobs:
             --cluster ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
-            --py-files gs://${{ env.STAGING_BUCKET }}/spark/core_dependencies.zip \
-            --async
+            --properties spark.jars.packages=com.google.cloud:pubsub-spark-connector:1.0.0 \
+            --async \
+            -- \
+            --project ${{ env.PROJECT_ID }} \
+            --influxdb-url http://${{ secrets.VM_INTERNAL_IP }}:8086 \
+            --influxdb-token ${{ secrets.INFLUXDB_TOKEN }} \
+            --race-id "${{ secrets.RACE_ID }}"
 
       - name: Submit Streaming Slow Path
         if: inputs.job_type == 'streaming-slow' || inputs.job_type == 'all'
@@ -107,5 +112,12 @@ jobs:
             --cluster ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
-            --py-files gs://${{ env.STAGING_BUCKET }}/spark/core_dependencies.zip \
-            --async
+            --properties spark.jars.packages=com.google.cloud:pubsub-spark-connector:1.0.0 \
+            --async \
+            -- \
+            --project ${{ env.PROJECT_ID }} \
+            --influxdb-url http://${{ secrets.VM_INTERNAL_IP }}:8086 \
+            --influxdb-token ${{ secrets.INFLUXDB_TOKEN }} \
+            --model-api-url http://${{ secrets.VM_INTERNAL_IP }}:8080 \
+            --race-id "${{ secrets.RACE_ID }}" \
+            --total-laps ${{ secrets.TOTAL_LAPS }}
