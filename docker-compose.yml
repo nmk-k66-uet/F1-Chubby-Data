@@ -4,8 +4,8 @@ services:
   influxdb:
     image: influxdb:2.7
     container_name: f1-influxdb
-    ports:
-      - "8086:8086"
+    expose:
+      - "8086"
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
       DOCKER_INFLUXDB_INIT_USERNAME: admin
@@ -85,6 +85,24 @@ services:
       - influxdb
       - model-api
     restart: unless-stopped
+
+  simulation:
+    build:
+      context: .
+      dockerfile: scripts/Dockerfile
+    container_name: f1-simulation
+    profiles: ["simulation"]
+    environment:
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-f1chubby-influx-token}
+      INFLUXDB_ORG: f1chubby
+      INFLUXDB_BUCKET: live_race
+      MODEL_API_URL: http://model-api:8080
+    volumes:
+      - f1-cache:/app/f1_cache
+    depends_on:
+      - influxdb
+      - model-api
 
 volumes:
   influxdb-data:

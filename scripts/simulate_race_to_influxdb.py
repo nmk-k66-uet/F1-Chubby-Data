@@ -12,8 +12,8 @@ Usage:
     # Drip-feed at 1 lap/sec (default) → InfluxDB
     python scripts/simulate_race_to_influxdb.py
 
-    # Faster replay: 5 laps/sec
-    python scripts/simulate_race_to_influxdb.py --speed 5
+    # Custom race (2025, round 3) at 5 laps/sec
+    python scripts/simulate_race_to_influxdb.py --year 2025 --round 3 --speed 5
 
     # Publish to Pub/Sub instead of InfluxDB
     python scripts/simulate_race_to_influxdb.py --pubsub --gcp-project my-project
@@ -51,15 +51,14 @@ MODEL_API_URL = os.environ.get("MODEL_API_URL", "http://localhost:8080")
 # Defaults — overridden by CLI args
 DEFAULT_YEAR = 2026
 DEFAULT_ROUND = 1
-DEFAULT_EVENT = "Australian Grand Prix"
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "f1_cache")
 
 # Set at runtime by main()
 YEAR = DEFAULT_YEAR
 ROUND_NUM = DEFAULT_ROUND
-EVENT_NAME = DEFAULT_EVENT
-RACE_ID = f"{YEAR}_{EVENT_NAME}"
+EVENT_NAME = ""  # derived from FastF1 schedule
+RACE_ID = ""
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -93,7 +92,7 @@ def load_session():
     fastf1.Cache.enable_cache(cache_dir)
     fastf1.set_log_level("WARNING")
 
-    print(f"Loading {YEAR} {EVENT_NAME} Race session from cache …")
+    print(f"Loading {YEAR} Round {ROUND_NUM} ({EVENT_NAME}) Race session …")
     session = fastf1.get_session(YEAR, ROUND_NUM, "R")
     session.load(telemetry=False, weather=False, messages=True)
     return session
@@ -303,8 +302,6 @@ def main():
                         help=f"Season year (default: {DEFAULT_YEAR})")
     parser.add_argument("--round", type=int, default=DEFAULT_ROUND,
                         help=f"Round number (default: {DEFAULT_ROUND})")
-    parser.add_argument("--event", type=str, default=DEFAULT_EVENT,
-                        help=f"Event name (default: {DEFAULT_EVENT})")
     parser.add_argument("--teardown", action="store_true",
                         help="Delete all simulation data from InfluxDB and exit")
     parser.add_argument("--pubsub", action="store_true",
@@ -315,8 +312,17 @@ def main():
 
     YEAR = args.year
     ROUND_NUM = args.round
-    EVENT_NAME = args.event
-    RACE_ID = f"{YEAR}_{EVENT_NAME}"
+
+    # Derive event name from FastF1 schedule (lightweight, no session load)
+    cache_dir = os.path.abspath(CACHE_DIR)
+    fastf1.Cache.enable_cache(cache_dir)
+    fastf1.set_log_level("WARNING")
+    event_schedule = fastf1.get_event(YEAR, ROUND_NUM)
+    EVENT_NAME = event_schedule["EventName"]
+    RACE_ID = f"{YEAR}_{ROUND_NUM}"
+    print(f"Resolved event: {YEAR} Round {ROUND_NUM} → {EVENT_NAME}")
+    print(f"Race ID: {RACE_ID}")
+    print()
 
     client = get_influx_client()
 

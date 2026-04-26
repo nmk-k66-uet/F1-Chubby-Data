@@ -1,0 +1,67 @@
+name: Run Race Simulation
+
+on:
+  workflow_dispatch:
+    inputs:
+      year:
+        description: 'Season year'
+        required: true
+        default: '2026'
+        type: string
+      round:
+        description: 'Round number'
+        required: true
+        default: '1'
+        type: string
+      speed:
+        description: 'Replay speed (laps per second)'
+        required: false
+        default: '1'
+        type: string
+      teardown_only:
+        description: 'Only delete previous data (no simulation)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: gen-lang-client-0314607994
+  ZONE: asia-southeast1-b
+  VM_NAME: f1-chubby-vm
+
+jobs:
+  simulate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SA_EMAIL }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build simulation args
+        id: args
+        run: |
+          ARGS="--year ${{ inputs.year }} --round ${{ inputs.round }}"
+          ARGS="$ARGS --speed ${{ inputs.speed }}"
+          if [ "${{ inputs.teardown_only }}" = "true" ]; then
+            ARGS="$ARGS --teardown"
+          fi
+          echo "sim_args=$ARGS" >> "$GITHUB_OUTPUT"
+
+      - name: Run simulation on VM
+        run: |
+          gcloud compute ssh ${{ env.VM_NAME }} \
+            --zone ${{ env.ZONE }} \
+            --quiet \
+            --command "cd ~/app && sudo docker compose run --rm simulation ${{ steps.args.outputs.sim_args }}"

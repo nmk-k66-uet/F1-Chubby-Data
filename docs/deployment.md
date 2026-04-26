@@ -188,31 +188,31 @@ gcloud compute ssh f1-chubby-vm --zone asia-southeast1-b -- \
 
 2. **Streaming consumers start automatically** with docker-compose (no manual step needed).
 
-3. **Run race simulation** (from your local machine or the VM):
+3. **Run race simulation** — the simulation runs as a Docker Compose service on the VM (InfluxDB is not exposed to the host network):
 
-   **Direct InfluxDB mode** (default — writes straight to InfluxDB):
+   **Via GitHub Actions (recommended):**
+   Go to **Actions** → **Run Race Simulation** → **Run workflow** and fill in year, round, event, and speed.
+
+   **Via SSH:**
    ```bash
-   # Default: 2026 Australian GP at 1 lap/sec
-   python scripts/simulate_race_to_influxdb.py
+   gcloud compute ssh f1-chubby-vm --zone asia-southeast1-b
 
-   # Custom race at 5 laps/sec
-   python scripts/simulate_race_to_influxdb.py --year 2025 --round 3 --event "Australian Grand Prix" --speed 5
+   cd ~/app
+
+   # Default: 2026 Round 1 at 1 lap/sec
+   sudo docker compose run --rm simulation
+
+   # Custom race at 5 laps/sec (event name is resolved automatically from year+round)
+   sudo docker compose run --rm simulation --year 2025 --round 3 --speed 5
 
    # Only teardown (delete previous data) without re-simulating
-   python scripts/simulate_race_to_influxdb.py --teardown
+   sudo docker compose run --rm simulation --teardown
    ```
 
-   **Pub/Sub mode** (publishes to Cloud Pub/Sub; streaming consumers write to InfluxDB):
+   **Local development** (uses `docker-compose.dev.yml` which exposes InfluxDB on `localhost:8086`):
    ```bash
-   # Requires --gcp-project; previous InfluxDB data is cleared automatically
-   python scripts/simulate_race_to_influxdb.py --pubsub --gcp-project gen-lang-client-0314607994
-
-   # Custom race via Pub/Sub at 3 laps/sec
-   python scripts/simulate_race_to_influxdb.py --pubsub --gcp-project gen-lang-client-0314607994 \
-     --year 2025 --round 5 --event "Chinese Grand Prix" --speed 3
+   python scripts/simulate_race_to_influxdb.py
    ```
-   > **Note:** Pub/Sub mode requires `google-cloud-pubsub` and valid GCP credentials.
-   > The streaming-fast and streaming-slow containers must be running to consume messages and write to InfluxDB.
 
 4. **Open dashboard:** `http://<VM_EXTERNAL_IP>` (or `http://<YOUR_DOMAIN>` if DNS is configured)
 
@@ -231,7 +231,7 @@ gcloud compute ssh f1-chubby-vm --zone asia-southeast1-b -- \
 
 ## CI/CD Pipelines
 
-Four GitHub Actions workflows automate the deployment lifecycle:
+Five GitHub Actions workflows automate the deployment lifecycle:
 
 ### deploy-vm.yml — Application Deployment
 
@@ -252,6 +252,13 @@ Four GitHub Actions workflows automate the deployment lifecycle:
 - **What it does:** On PR → `terraform plan` (comment on PR). On merge → `terraform apply`
 - **Auth:** GitHub Actions WIF → GCP (same `WIF_PROVIDER` / `WIF_SA_EMAIL` as other workflows)
 - **State:** GCS bucket `f1chubby-tfstate-gen-lang-client-0314607994`
+
+### simulate.yml — Race Simulation
+
+- **Trigger:** Manual dispatch only (`workflow_dispatch`)
+- **Inputs:** `year`, `round`, `speed`, `teardown_only`
+- **What it does:** SSHs into the VM, runs `docker compose run --rm simulation` with the provided args
+- **Auth:** Workload Identity Federation (same secrets as deploy-vm)
 
 ---
 

@@ -339,8 +339,9 @@ def fragment_live_race(session):
     """, unsafe_allow_html=True)
 
     year = st.session_state['selected_event']['year']
+    round_num = st.session_state['selected_event']['round']
     event = st.session_state['selected_event']['name']
-    race_id = f"{year}_{event}"
+    race_id = f"{year}_{round_num}"
 
     # ==========================================
     # 1. CONNECTION & DATA STATUS (separated)
