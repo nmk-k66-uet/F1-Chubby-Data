@@ -447,8 +447,6 @@ def fragment_live_race(session):
     # LEFT: LIVE TIMING TOWER (fast path)
     # ==========================================
     with col_tower:
-        st.markdown("<span class='source-badge' style='background:#28a745;'>InfluxDB Live</span>", unsafe_allow_html=True)
-
         status_color = "red" if current_lap < total_laps else "gray"
         status_text = f"LAP {current_lap}/{total_laps}" if current_lap < total_laps else "🏁 FINISHED"
         st.markdown(f"<h3 class='live-header' style='color: {status_color}; margin-top:0;'>{status_text}</h3>", unsafe_allow_html=True)
