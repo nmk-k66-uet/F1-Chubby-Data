@@ -179,7 +179,7 @@ docker compose -f docker-compose.dev.yml down
 **Model API shows "Model file missing"**
 → Check that `assets/Models/` contains the 3 `.pkl` files. If not, download from GCS:
 ```bash
-gsutil cp gs://f1chubby-model-gen-lang-client-0314607994/*.pkl assets/Models/
+gsutil cp gs://f1chubby-model-${PROJECT_ID}/*.pkl assets/Models/
 ```
 
 **Port conflict**

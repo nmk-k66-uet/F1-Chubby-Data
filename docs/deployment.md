@@ -16,22 +16,23 @@ Step-by-step guide to deploy the full F1-Chubby-Data system on Google Cloud Plat
 On a fresh GCP project, enable the minimum APIs that Terraform and the GCS backend need:
 
 ```bash
+export PROJECT_ID=<YOUR_PROJECT_ID>
 gcloud services enable \
   cloudresourcemanager.googleapis.com \
   storage.googleapis.com \
-  --project=gen-lang-client-0314607994
+  --project=$PROJECT_ID
 ```
 
 Then create the Terraform state bucket (once, before first `terraform init`):
 
 ```bash
-gcloud storage buckets create gs://f1chubby-tfstate-gen-lang-client-0314607994 \
+gcloud storage buckets create gs://f1chubby-tfstate-$PROJECT_ID \
   --location=asia-southeast1 \
   --uniform-bucket-level-access \
   --public-access-prevention
 
 # Enable versioning to protect state history
-gcloud storage buckets update gs://f1chubby-tfstate-gen-lang-client-0314607994 \
+gcloud storage buckets update gs://f1chubby-tfstate-$PROJECT_ID \
   --versioning
 ```
 
@@ -121,7 +122,7 @@ Upload the local FastF1 cache to GCS so the training pipeline and Streamlit can 
 
 ```bash
 # Upload FastF1 cache to GCS (speeds up Dataproc training and Streamlit startup)
-gsutil -m cp -r f1_cache/* gs://f1chubby-cache-gen-lang-client-0314607994/
+gsutil -m cp -r f1_cache/* gs://f1chubby-cache-${PROJECT_ID}/
 ```
 
 Alternatively, download the pre-collected raw dataset from our assignment group and upload it directly:
@@ -131,7 +132,7 @@ Alternatively, download the pre-collected raw dataset from our assignment group 
 # Link: <TODO: add link>
 
 # Upload to the raw bucket
-gsutil -m cp -r <extracted_folder>/* gs://f1chubby-raw-gen-lang-client-0314607994/
+gsutil -m cp -r <extracted_folder>/* gs://f1chubby-raw-${PROJECT_ID}/
 ```
 
 ---
@@ -251,7 +252,7 @@ Five GitHub Actions workflows automate the deployment lifecycle:
 - **Trigger:** Push to `main` or PR touching `infra/**`
 - **What it does:** On PR → `terraform plan` (comment on PR). On merge → `terraform apply`
 - **Auth:** GitHub Actions WIF → GCP (same `WIF_PROVIDER` / `WIF_SA_EMAIL` as other workflows)
-- **State:** GCS bucket `f1chubby-tfstate-gen-lang-client-0314607994`
+- **State:** GCS bucket `f1chubby-tfstate-${PROJECT_ID}`
 
 ### simulate.yml — Race Simulation
 

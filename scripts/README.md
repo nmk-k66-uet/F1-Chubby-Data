@@ -20,7 +20,7 @@ Start, stop, or check the status of the GCE production VM.
 **Prerequisites:** `gcloud` CLI authenticated with access to the project.
 
 **Hardcoded values:**
-- Project: `gen-lang-client-0314607994`
+- Project: `<PROJECT_ID>`
 - Zone: `asia-southeast1-b`
 - VM name: `f1-chubby-vm`
 
@@ -38,7 +38,7 @@ python scripts/simulate_race_to_influxdb.py
 python scripts/simulate_race_to_influxdb.py --speed 5
 
 # Publish to Pub/Sub instead (tests the full Dataproc pipeline)
-python scripts/simulate_race_to_influxdb.py --pubsub --gcp-project gen-lang-client-0314607994
+python scripts/simulate_race_to_influxdb.py --pubsub --gcp-project ${PROJECT_ID}
 
 # Delete all simulation data from InfluxDB
 python scripts/simulate_race_to_influxdb.py --teardown

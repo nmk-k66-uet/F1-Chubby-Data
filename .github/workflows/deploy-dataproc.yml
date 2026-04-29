@@ -15,10 +15,10 @@ permissions:
   id-token: write
 
 env:
-  PROJECT_ID: gen-lang-client-0314607994
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
   REGION: asia-southeast1
   CLUSTER_NAME: f1-chubby-spark
-  STAGING_BUCKET: f1chubby-dataproc-staging-gen-lang-client-0314607994
+  STAGING_BUCKET: f1chubby-dataproc-staging-${{ vars.GCP_PROJECT_ID }}
 
 jobs:
   submit:
@@ -88,6 +88,7 @@ jobs:
             --cluster ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
-            --py-files gs://${{ env.STAGING_BUCKET }}/spark/core_dependencies.zip
+            --py-files gs://${{ env.STAGING_BUCKET }}/spark/core_dependencies.zip \
+            --properties spark.executorEnv.GCP_PROJECT_ID=${{ env.PROJECT_ID }},spark.yarn.appMasterEnv.GCP_PROJECT_ID=${{ env.PROJECT_ID }}
 
 

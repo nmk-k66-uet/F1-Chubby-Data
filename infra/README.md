@@ -13,22 +13,24 @@ Terraform configuration for all GCP resources.
 On a fresh GCP project, enable the minimum APIs that Terraform and the GCS backend need:
 
 ```bash
+export PROJECT_ID=<YOUR_PROJECT_ID>
+
 gcloud services enable \
   cloudresourcemanager.googleapis.com \
   storage.googleapis.com \
-  --project=gen-lang-client-0314607994
+  --project=$PROJECT_ID
 ```
 
 Then create the state bucket:
 
 ```bash
-gcloud storage buckets create gs://f1chubby-tfstate-gen-lang-client-0314607994 \
+gcloud storage buckets create gs://f1chubby-tfstate-$PROJECT_ID \
   --location=asia-southeast1 \
   --uniform-bucket-level-access \
   --public-access-prevention
 
 # Enable versioning to protect state history
-gcloud storage buckets update gs://f1chubby-tfstate-gen-lang-client-0314607994 \
+gcloud storage buckets update gs://f1chubby-tfstate-$PROJECT_ID \
   --versioning
 ```
 
@@ -44,7 +46,7 @@ gcloud auth application-default login
 gcloud auth application-default set-quota-project <YOUR_PROJECT_ID>
 
 # Initialize (downloads providers, connects to GCS backend)
-terraform init
+terraform init -backend-config="bucket=f1chubby-tfstate-<YOUR_PROJECT_ID>"
 
 # Review planned changes
 terraform plan

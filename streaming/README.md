@@ -43,7 +43,7 @@ docker run --rm \
   --network host \
   f1-streaming \
   python streaming_fast.py \
-    --project gen-lang-client-0314607994 \
+    --project ${PROJECT_ID} \
     --influxdb-url http://localhost:8086 \
     --influxdb-token f1chubby-influx-token
 
@@ -52,7 +52,7 @@ docker run --rm \
   --network host \
   f1-streaming \
   python streaming_slow.py \
-    --project gen-lang-client-0314607994 \
+    --project ${PROJECT_ID} \
     --influxdb-url http://localhost:8086 \
     --influxdb-token f1chubby-influx-token \
     --model-api-url http://localhost:8080
@@ -65,13 +65,13 @@ pip install google-cloud-pubsub influxdb-client requests
 
 # Fast path
 python streaming/streaming_fast.py \
-  --project gen-lang-client-0314607994 \
+  --project ${PROJECT_ID} \
   --influxdb-url http://localhost:8086 \
   --influxdb-token f1chubby-influx-token
 
 # Slow path
 python streaming/streaming_slow.py \
-  --project gen-lang-client-0314607994 \
+  --project ${PROJECT_ID} \
   --influxdb-url http://localhost:8086 \
   --influxdb-token f1chubby-influx-token \
   --model-api-url http://localhost:8080

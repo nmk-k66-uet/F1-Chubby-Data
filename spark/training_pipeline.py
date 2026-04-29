@@ -14,8 +14,9 @@ if is_local:
     os.environ["HADOOP_HOME"] = "D:\\hadoop"
     os.environ["PATH"] += os.pathsep + "D:\\hadoop\\bin"
 
-RAW_BUCKET = "f1chubby-raw-gen-lang-client-0314607994"
-MODELS_BUCKET = "f1chubby-model-gen-lang-client-0314607994"
+PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "<PROJECT_ID>")
+RAW_BUCKET = f"f1chubby-raw-{PROJECT_ID}"
+MODELS_BUCKET = f"f1chubby-model-{PROJECT_ID}"
 
 builder = SparkSession.builder.appName("F1_Model_Training_Pipeline")
 
@@ -29,7 +30,7 @@ if is_local:
         .config("spark.hadoop.fs.gs.impl", "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem") \
         .config("spark.hadoop.fs.AbstractFileSystem.gs.impl", "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS") \
         .config("spark.hadoop.google.cloud.auth.service.account.enable", "true") \
-        .config("spark.hadoop.google.cloud.auth.service.account.json.keyfile", "gcs-key/gen-lang-client-0314607994-ff9d436a97ef.json") \
+        .config("spark.hadoop.google.cloud.auth.service.account.json.keyfile", f"gcs-key/{PROJECT_ID}-ff9d436a97ef.json") \
         .config("spark.python.worker.faulthandler.enabled", "true") \
         .config("spark.sql.execution.pyspark.udf.faulthandler.enabled", "true")
 

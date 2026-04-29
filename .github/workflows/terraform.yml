@@ -34,7 +34,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Init
-        run: terraform init
+        run: terraform init -backend-config="bucket=f1chubby-tfstate-${{ vars.GCP_PROJECT_ID }}"
 
       - name: Terraform Format Check
         run: terraform fmt -check -recursive

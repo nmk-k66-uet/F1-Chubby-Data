@@ -1,6 +1,7 @@
 terraform {
+  # Backend configuration: use -backend-config during terraform init
+  # Example: terraform init -backend-config="bucket=f1chubby-tfstate-<PROJECT_ID>"
   backend "gcs" {
-    bucket = "f1chubby-tfstate-gen-lang-client-0314607994"
     prefix = "terraform/state"
   }
 
@@ -106,6 +107,8 @@ resource "google_service_account" "dataproc" {
   project      = var.project_id
   account_id   = "f1-dataproc-sa"
   display_name = "F1 Dataproc Service Account"
+
+  depends_on = [google_project_service.apis]
 }
 
 locals {
@@ -166,6 +169,8 @@ resource "google_service_account" "github_actions" {
   project      = var.project_id
   account_id   = "github-actions-sa"
   display_name = "GitHub Actions Service Account"
+
+  depends_on = [google_project_service.apis]
 }
 
 # Allow GitHub Actions to impersonate the service account

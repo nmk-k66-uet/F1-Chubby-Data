@@ -38,9 +38,10 @@ The easiest way is to trigger the `deploy-dataproc.yml` workflow:
 
 ```bash
 # 1. Upload job files to GCS
-gsutil cp spark/*.py gs://f1chubby-dataproc-staging-gen-lang-client-0314607994/spark/
+export PROJECT_ID=<YOUR_PROJECT_ID>
+gsutil cp spark/*.py gs://f1chubby-dataproc-staging-${PROJECT_ID}/spark/
 zip -r core_dependencies.zip core/
-gsutil cp core_dependencies.zip gs://f1chubby-dataproc-staging-gen-lang-client-0314607994/spark/
+gsutil cp core_dependencies.zip gs://f1chubby-dataproc-staging-${PROJECT_ID}/spark/
 
 # 2. Ensure a Dataproc cluster exists
 gcloud dataproc clusters create f1-chubby-spark \
@@ -52,16 +53,16 @@ gcloud dataproc clusters create f1-chubby-spark \
   --initialization-actions gs://goog-dataproc-initialization-actions-asia-southeast1/python/pip-install.sh \
   --metadata 'PIP_PACKAGES=fastf1 numpy<2 influxdb-client requests' \
   --max-idle 600s \
-  --project gen-lang-client-0314607994 \
-  --bucket f1chubby-dataproc-staging-gen-lang-client-0314607994
+  --project ${PROJECT_ID} \
+  --bucket f1chubby-dataproc-staging-${PROJECT_ID}
 
 # 3. Submit the training job
 gcloud dataproc jobs submit pyspark \
-  gs://f1chubby-dataproc-staging-gen-lang-client-0314607994/spark/training_pipeline.py \
+  gs://f1chubby-dataproc-staging-${PROJECT_ID}/spark/training_pipeline.py \
   --cluster f1-chubby-spark \
   --region asia-southeast1 \
-  --project gen-lang-client-0314607994 \
-  --py-files gs://f1chubby-dataproc-staging-gen-lang-client-0314607994/spark/core_dependencies.zip
+  --project ${PROJECT_ID} \
+  --py-files gs://f1chubby-dataproc-staging-${PROJECT_ID}/spark/core_dependencies.zip
 ```
 
 ### Run Locally
@@ -82,11 +83,11 @@ The Spark streaming jobs (`streaming_fast.py`, `streaming_slow.py`) can be submi
 
 ```bash
 gcloud dataproc jobs submit pyspark \
-  gs://f1chubby-dataproc-staging-gen-lang-client-0314607994/spark/streaming_fast.py \
+  gs://f1chubby-dataproc-staging-${PROJECT_ID}/spark/streaming_fast.py \
   --cluster f1-chubby-spark \
   --region asia-southeast1 \
-  --project gen-lang-client-0314607994 \
-  -- --project gen-lang-client-0314607994 \
+  --project ${PROJECT_ID} \
+  -- --project ${PROJECT_ID} \
      --influxdb-url http://<VM_IP>:8086 \
      --influxdb-token f1chubby-influx-token
 ```

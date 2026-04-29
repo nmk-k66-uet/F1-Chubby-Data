@@ -59,7 +59,7 @@ services:
     command:
       - python
       - streaming_fast.py
-      - --project=${GCP_PROJECT_ID:-gen-lang-client-0314607994}
+      - --project=${GCP_PROJECT_ID:-<PROJECT_ID>}
       - --influxdb-url=http://influxdb:8086
       - --influxdb-token=${INFLUXDB_TOKEN:-f1chubby-influx-token}
       - --timing-sub=${TIMING_VIZ_SUB:-f1-timing-viz-fast}
@@ -75,7 +75,7 @@ services:
     command:
       - python
       - streaming_slow.py
-      - --project=${GCP_PROJECT_ID:-gen-lang-client-0314607994}
+      - --project=${GCP_PROJECT_ID:-<PROJECT_ID>}
       - --influxdb-url=http://influxdb:8086
       - --influxdb-token=${INFLUXDB_TOKEN:-f1chubby-influx-token}
       - --model-api-url=http://model-api:8080
