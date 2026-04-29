@@ -89,6 +89,6 @@ jobs:
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
             --py-files gs://${{ env.STAGING_BUCKET }}/spark/core_dependencies.zip \
-            --properties spark.executorEnv.GCP_PROJECT_ID=${{ env.PROJECT_ID }},spark.yarn.appMasterEnv.GCP_PROJECT_ID=${{ env.PROJECT_ID }}
+            -- "${{ env.PROJECT_ID }}" 
 
 
