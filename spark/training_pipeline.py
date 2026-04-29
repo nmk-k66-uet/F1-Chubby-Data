@@ -50,10 +50,6 @@ if is_local:
             "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS",
         )
         .config("spark.hadoop.google.cloud.auth.service.account.enable", "true")
-        .config(
-            "spark.hadoop.google.cloud.auth.service.account.json.keyfile",
-            f"gcs-key/{PROJECT_ID}-ff9d436a97ef.json",
-        )
         .config("spark.python.worker.faulthandler.enabled", "true")
         .config("spark.sql.execution.pyspark.udf.faulthandler.enabled", "true")
     )
