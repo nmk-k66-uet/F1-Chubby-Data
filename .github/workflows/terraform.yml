@@ -3,11 +3,11 @@ name: Terraform
 on:
   pull_request:
     paths:
-      - 'infra/**'
+      - "infra/**"
   push:
-    branches: [main]
+    branches: [ main ]
     paths:
-      - 'infra/**'
+      - "infra/**"
 
 permissions:
   contents: read
@@ -34,7 +34,9 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Init
-        run: terraform init -backend-config="bucket=f1chubby-tfstate-${{ vars.GCP_PROJECT_ID }}"
+        run: terraform init \
+          -backend-config="bucket=f1chubby-tfstate-${{ vars.GCP_PROJECT_ID }}" \
+          -backend-config="prefix=terraform/state"
 
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
