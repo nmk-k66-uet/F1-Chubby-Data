@@ -107,12 +107,21 @@ terraform output
 
 The CI/CD pipelines authenticate to GCP via **Workload Identity Federation** (OIDC — no JSON keys).
 
+The GitHub workflows also read the active GCP project from the repository variable `GCP_PROJECT_ID`.
+Set it to the same value you used in `infra/terraform.tfvars`.
+
 Go to your GitHub repo → **Settings** → **Secrets and variables** → **Actions** and add:
 
 | Secret | Value |
 |--------|-------|
 | `WIF_PROVIDER` | `terraform output -raw wif_provider` |
 | `WIF_SA_EMAIL` | `terraform output -raw github_actions_sa_email` |
+
+Then add the repository variable:
+
+| Variable | Value |
+|----------|-------|
+| `GCP_PROJECT_ID` | Your GCP project ID used by the GitHub Actions workflows |
 
 ---
 
