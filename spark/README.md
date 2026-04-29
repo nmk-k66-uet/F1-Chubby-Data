@@ -7,10 +7,8 @@ PySpark jobs designed to run on **Google Dataproc**. This directory contains the
 | File | Description |
 |------|-------------|
 | `training_pipeline.py` | Extracts pre-race and in-race features from 2024–2026 FastF1 data, trains 3 Random Forest models, uploads `.pkl` files to GCS |
-| `streaming_fast.py` | Spark version of the fast streaming consumer (Pub/Sub → InfluxDB) |
-| `streaming_slow.py` | Spark version of the slow streaming consumer (Pub/Sub → Model API → InfluxDB) |
 
-> **Note:** The `streaming/` directory at the repo root contains Docker-packaged equivalents of the streaming jobs using the plain Python Pub/Sub client. Both versions consume the same Pub/Sub subscriptions and write to the same InfluxDB measurements.
+> **Note:** The `streaming/` directory at the repo root contains Docker-packaged versions of the streaming jobs. For streaming consumers, use the plain Python Pub/Sub implementations in the `streaming/` directory instead.
 
 ## Training Pipeline
 
