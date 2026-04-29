@@ -2,6 +2,8 @@ terraform {
   # Backend configuration: use -backend-config during terraform init
   # Example: terraform init -backend-config="bucket=f1chubby-tfstate-<PROJECT_ID>"
   backend "gcs" {
+    bucket = ""
+    prefix = ""
   }
 
   required_version = ">= 1.5"
