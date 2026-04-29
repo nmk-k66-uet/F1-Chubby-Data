@@ -240,3 +240,4 @@ resource "google_apikeys_key" "gemini" {
 
   depends_on = [google_project_service.apis]
 }
+
