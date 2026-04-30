@@ -6,24 +6,53 @@ Terraform configuration for all GCP resources.
 
 - [Terraform >= 1.5](https://developer.hashicorp.com/terraform/install)
 - GCP project with billing enabled
-- [Terraform Cloud](https://app.terraform.io) account (free tier)
+- A GCS bucket for Terraform state (created once, before first `terraform init`)
+
+## Bootstrap
+
+On a fresh GCP project, enable the minimum APIs that Terraform and the GCS backend need:
+
+```bash
+export PROJECT_ID=<YOUR_PROJECT_ID>
+
+gcloud services enable \
+  cloudresourcemanager.googleapis.com \
+  storage.googleapis.com \
+  --project=$PROJECT_ID
+```
+
+Then create the state bucket:
+
+```bash
+gcloud storage buckets create gs://f1chubby-tfstate-$PROJECT_ID \
+  --location=asia-southeast1 \
+  --uniform-bucket-level-access \
+  --public-access-prevention
+
+# Enable versioning to protect state history
+gcloud storage buckets update gs://f1chubby-tfstate-$PROJECT_ID \
+  --versioning
+```
 
 ## Quick Start
 
 ```bash
 cd infra/
 
-# First time: login to Terraform Cloud
-terraform login
+# Authenticate to GCP
+gcloud auth application-default login
 
-# Initialize (downloads providers, connects to TFC backend)
-terraform init
+# Set quota project (required by apikeys.googleapis.com)
+gcloud auth application-default set-quota-project <YOUR_PROJECT_ID>
+
+# Initialize (downloads providers, connects to GCS backend)
+terraform init -backend-config="bucket=f1chubby-tfstate-<YOUR_PROJECT_ID>"
 
 # Review planned changes
-terraform plan -var="db_password=YOUR_SECURE_PASSWORD"
+terraform plan
 
 # Apply
-terraform apply -var="db_password=YOUR_SECURE_PASSWORD"
+terraform apply
 
 # View outputs (connection strings, IPs, etc.)
 terraform output
@@ -32,7 +61,7 @@ terraform output
 ## Tear Down
 
 ```bash
-terraform destroy -var="db_password=ANY_VALUE"
+terraform destroy
 ```
 
 ## Modules
@@ -40,9 +69,9 @@ terraform destroy -var="db_password=ANY_VALUE"
 | Module | Resources |
 |--------|-----------|
 | `networking` | VPC, subnet, firewall rules (SSH, app ports, internal) |
-| `pubsub` | 3 topics + 6 subscriptions (fast/slow per topic) |
-| `storage` | 3 GCS buckets (raw, models, replay) |
-| `database` | Cloud SQL PostgreSQL (db-f1-micro, stopped by default) |
+| `pubsub` | 2 topics + 3 subscriptions (fast path × 2, slow path × 1) |
+| `storage` | 3 GCS buckets (raw, models, cache) |
+
 | `compute` | GCE VM e2-medium with Container-Optimized OS |
 | `dataproc` | API enablement + staging bucket |
 | `cloudrun` | API enablement + Artifact Registry repo |
@@ -57,9 +86,11 @@ After `terraform apply`, add these GitHub repo secrets:
 
 ## Cost Management
 
-- Cloud SQL starts with `activation_policy = NEVER` (stopped). Start manually:
-  ```bash
-  gcloud sql instances patch f1-chubby-postgres --activation-policy ALWAYS
-  ```
 - Stop VM when idle: `gcloud compute instances stop f1-chubby-vm --zone asia-southeast1-b`
 - Dataproc clusters are created on-demand, not provisioned here.
+
+---
+
+For the full end-to-end production deployment guide (including CI/CD, VM configuration, and data upload), see [docs/deployment.md](../docs/deployment.md).
+
+← Back to [ReadMe.md](../ReadMe.md)

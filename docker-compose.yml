@@ -4,8 +4,8 @@ services:
   influxdb:
     image: influxdb:2.7
     container_name: f1-influxdb
-    ports:
-      - "8086:8086"
+    expose:
+      - "8086"
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
       DOCKER_INFLUXDB_INIT_USERNAME: admin
@@ -20,12 +20,12 @@ services:
   model-api:
     build: ./model_serving
     container_name: f1-model-api
-    # Exposed on host for Dataproc Spark jobs; firewall restricts 8080 to subnet only
-    ports:
-      - "8080:8080"
+    # No host port — internal only (accessed as model-api:8080 on docker network)
+    expose:
+      - "8080"
     environment:
       MODEL_DIR: /app/models
-      GCS_BUCKET: ${GCS_MODELS_BUCKET:-f1chubby-model-gen-lang-client-0314607994}
+      GCS_BUCKET: ${GCS_MODELS_BUCKET:-}
       USE_GCS: ${USE_GCS:-true}
     volumes:
       - model-cache:/app/models
@@ -44,15 +44,68 @@ services:
       INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-f1chubby-influx-token}
       INFLUXDB_ORG: f1chubby
       INFLUXDB_BUCKET: live_race
-      GCS_CACHE_BUCKET: ${GCS_CACHE_BUCKET:-f1chubby-cache-gen-lang-client-0314607994}
+      GCS_CACHE_BUCKET: ${GCS_CACHE_BUCKET:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      F1_API_PROXY: ${F1_API_PROXY:-}
     volumes:
-      - ./f1_cache:/app/f1_cache
+      - f1-cache:/app/f1_cache
     depends_on:
       - model-api
       - influxdb
     restart: unless-stopped
 
+  streaming-fast:
+    build: ./streaming
+    container_name: f1-streaming-fast
+    command:
+      - python
+      - streaming_fast.py
+      - --project=${GCP_PROJECT_ID:-<PROJECT_ID>}
+      - --influxdb-url=http://influxdb:8086
+      - --influxdb-token=${INFLUXDB_TOKEN:-f1chubby-influx-token}
+      - --timing-sub=${TIMING_VIZ_SUB:-f1-timing-viz-fast}
+      - --rc-sub=${RC_VIZ_SUB:-f1-race-control-viz-fast}
+      - --duration=0
+    depends_on:
+      - influxdb
+    restart: unless-stopped
+
+  streaming-slow:
+    build: ./streaming
+    container_name: f1-streaming-slow
+    command:
+      - python
+      - streaming_slow.py
+      - --project=${GCP_PROJECT_ID:-<PROJECT_ID>}
+      - --influxdb-url=http://influxdb:8086
+      - --influxdb-token=${INFLUXDB_TOKEN:-f1chubby-influx-token}
+      - --model-api-url=http://model-api:8080
+      - --timing-sub=${TIMING_PRED_SUB:-f1-timing-pred-slow}
+      - --duration=0
+    depends_on:
+      - influxdb
+      - model-api
+    restart: unless-stopped
+
+  simulation:
+    build:
+      context: .
+      dockerfile: scripts/Dockerfile
+    container_name: f1-simulation
+    profiles: ["simulation"]
+    environment:
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-f1chubby-influx-token}
+      INFLUXDB_ORG: f1chubby
+      INFLUXDB_BUCKET: live_race
+      MODEL_API_URL: http://model-api:8080
+    volumes:
+      - f1-cache:/app/f1_cache
+    depends_on:
+      - influxdb
+      - model-api
+
 volumes:
   influxdb-data:
   model-cache:
+  f1-cache:

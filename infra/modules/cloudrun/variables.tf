@@ -11,9 +11,3 @@ variable "image" {
   type        = string
   default     = ""
 }
-
-variable "cloudsql_connection_name" {
-  description = "Cloud SQL connection name for Cloud SQL proxy"
-  type        = string
-  default     = ""
-}

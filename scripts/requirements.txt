@@ -1,0 +1,5 @@
+fastf1==3.8.2
+influxdb-client==1.48.0
+google-cloud-pubsub>=2.21
+requests>=2.31
+pandas>=2.0

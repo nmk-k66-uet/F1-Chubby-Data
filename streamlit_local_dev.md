@@ -1,4 +1,4 @@
-# Streamlit Local Development Guide
+# Local Development Guide
 
 ## Prerequisites
 
@@ -7,7 +7,7 @@
   - `podium_model.pkl`
   - `in_race_win_model.pkl`
   - `in_race_podium_model.pkl`
-- The FastF1 cache directory `f1_cache/` (should already exist in the repo with ~800MB of cached session data for 2024–2026)
+- The FastF1 cache directory `f1_cache/` (~800 MB of cached session data for 2024–2026)
 
 ## Quick Start
 
@@ -23,78 +23,52 @@ The app is available at **http://localhost:8501**.
 
 ## What Happens on Startup
 
-1. **postgres** starts and auto-creates the schema from `sql/init.sql`
-2. **influxdb** and **model-api** start in parallel
-3. **etl** runs (depends on postgres being healthy):
-   - Checks if `session_results` table already has data → **skips if already seeded**
-   - Runs in **offline mode** — reads only from the local `f1_cache/` directory, no external API calls
-   - Loads race calendar, session results, and standings for 2024–2026 into PostgreSQL
-   - Exits with code 0
-4. **streamlit** starts only after ETL exits successfully
-
-On subsequent `docker compose up`, the ETL detects existing data and exits in ~1 second.
+1. **influxdb** and **model-api** start in parallel
+2. **streamlit** starts once both are up
 
 ## Architecture
 
-The dev stack runs 5 services (4 long-running + 1 one-shot ETL):
+The dev stack runs 3 long-running services:
 
 | Service | Port | Description |
 |---------|------|-------------|
 | **streamlit** | `8501` | Streamlit dashboard (production uses port 80) |
 | **model-api** | `8080` | FastAPI ML prediction service |
-| **postgres** | `5432` | PostgreSQL 15 (replaces Cloud SQL) |
 | **influxdb** | `8086` | InfluxDB 2.7 for live race telemetry |
-| **etl** | — | One-shot: seeds PostgreSQL from `f1_cache/`, then exits |
 
 ```
-                          ┌───────────┐
-                     ┌───▶│ Model API │
-                     │    │   :8080   │
-┌──────────┐         │    └───────────┘
-│   ETL    │─(seeds)─┤
-│ (offline)│         │    ┌──────────┐
-└──────────┘         └───▶│ Postgres │◀──── Streamlit
-                          │  :5432   │
-                          └──────────┘
-
-┌──────────┐     ┌──────────┐
-│ Streamlit│────▶│ InfluxDB │
-│  :8501   │     │  :8086   │
-└──────────┘     └──────────┘
+┌──────────┐     ┌───────────┐
+│ Streamlit│────▶│ Model API │
+│  :8501   │     │   :8080   │
+└────┬─────┘     └───────────┘
+     │
+     │           ┌──────────┐
+     └──────────▶│ InfluxDB │
+                 │  :8086   │
+                 └──────────┘
 ```
 
-## Data Setup
+## Data
 
 ### Sources of Truth
 
-| Data Type | Source of Truth | Stored In | Fallback |
-|-----------|----------------|-----------|----------|
-| Calendar, results, standings | FastF1 cache → PostgreSQL (via ETL) | `postgres` container (`pgdata` volume) | FastF1 API (if PG empty) |
-| Telemetry, lap data, weather | FastF1 cache | `f1_cache/` directory (bind-mounted) | FastF1 API (live/uncached sessions) |
+| Data Type | Source | Stored In | Fallback |
+|-----------|--------|-----------|----------|
+| Calendar, results, standings | GCS / FastF1 cache | `f1_cache/` directory (bind-mounted) | FastF1 API (uncached sessions) |
+| Telemetry, lap data, weather | FastF1 cache | `f1_cache/` directory (bind-mounted) | FastF1 API (uncached sessions) |
 | ML predictions | Model `.pkl` files | `assets/Models/` (bind-mounted to model-api) | None |
 | Live race telemetry | InfluxDB | `influxdb` container (`influxdb-data` volume) | None |
 
 ### FastF1 Cache (`f1_cache/`)
 
-The `f1_cache/` directory is shared between the ETL and Streamlit containers via bind mount. It contains:
+The `f1_cache/` directory is bind-mounted into the Streamlit container:
 
 | Contents | Purpose |
 |----------|---------|
 | `fastf1_http_cache.sqlite` | HTTP response cache (all API calls) |
 | `2024/`, `2025/`, `2026/` | Parsed session data (laps, telemetry, weather) |
 
-- **ETL** reads from this cache in offline mode to populate PostgreSQL (no outbound API calls)
-- **Streamlit** reads from this cache for telemetry/lap data (`load_f1_session()`)
-- Once a session is cached, all subsequent loads are local reads — no network call
-
-### PostgreSQL Schema
-
-Auto-created from `sql/init.sql` on first postgres startup. Four tables:
-
-- `race_calendar` — race schedule (year, round, event name, country, circuit)
-- `session_results` — per-driver results for R/Q/S sessions (position, time, points, best lap)
-- `driver_standings` — cumulative standings after each round
-- `constructor_standings` — cumulative standings after each round
+Once a session is cached, all subsequent loads are local reads — no network call.
 
 ### Model Files
 
@@ -104,18 +78,14 @@ The model-api loads `.pkl` files from `assets/Models/` via read-only bind mount:
 - `in_race_win_model.pkl` — live race win probability
 - `in_race_podium_model.pkl` — live race podium probability
 
-No GCS auth or downloads needed — production uses GCS, dev uses local files.
+No GCS auth needed — production uses GCS, dev uses local files.
 
-### Data Flow: Streamlit reads
+### Data Flow
 
 ```
 Streamlit page request
   │
-  ├─ Calendar/Results/Standings?
-  │   └─ core/data_loader.py → core/db.py → PostgreSQL
-  │       └─ (fallback: FastF1 API if PG returns empty)
-  │
-  ├─ Telemetry/Laps?
+  ├─ Calendar/Results/Standings/Telemetry/Laps?
   │   └─ core/data_loader.py → FastF1 → f1_cache/ (local read if cached)
   │
   ├─ ML Prediction?
@@ -127,7 +97,7 @@ Streamlit page request
 
 ## Hot Reload
 
-Source code is bind-mounted into the containers, so changes to these files are reflected without rebuilding:
+Source code is bind-mounted into the containers, so changes are reflected without rebuilding:
 
 - `main.py`, `core/`, `components/`, `pages/`, `assets/` → Streamlit container
 - `model_serving/app.py` → Model API container (uvicorn `--reload` enabled)
@@ -145,22 +115,23 @@ All defaults are set in `docker-compose.dev.yml`. The `.env` file only needs:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `POSTGRES_PASSWORD` | `localdev123` | PostgreSQL password |
 | `INFLUXDB_TOKEN` | `f1chubby-influx-token` | InfluxDB admin token |
 | `INFLUXDB_PASSWORD` | `f1chubby2026` | InfluxDB admin password |
+| `F1_API_PROXY` | *(empty — direct API access)* | Cloudflare Worker URL to proxy FastF1 API requests (see [docs/deployment.md](docs/deployment.md#f1-api-proxy-optional)) |
+
+> **Note:** GCS credentials are not required for local development. The data loader falls back to the FastF1 API when GCS is unavailable. If the FastF1 API is also blocked (e.g. cloud provider IPs), set `F1_API_PROXY` to a Cloudflare Worker proxy URL.
 
 ## Differences from Production
 
 | Aspect | Production (`docker-compose.yml`) | Dev (`docker-compose.dev.yml`) |
 |--------|----------------------------------|-------------------------------|
-| PostgreSQL | Cloud SQL (external) | Local container with auto-schema |
-| ETL | Runs separately via `scripts/load_historical_data.py` | Runs automatically on first `up`, offline mode |
 | Models | Downloaded from GCS on startup | Bind-mounted from `assets/Models/` |
 | Streamlit port | 80 | 8501 |
 | Model API port | Internal only | Exposed on 8080 |
 | Source code | Baked into Docker image | Bind-mounted (hot reload) |
 | Model API mode | `uvicorn app:app` | `uvicorn app:app --reload` |
-| GCS auth | VM service account | Not needed |
+| Streaming consumers | Run as containers (`streaming-fast`, `streaming-slow`) | Not included (use production compose or run manually) |
+| GCS auth | VM service account | Not needed (GCS is optional, auto-disables without credentials) |
 | FastF1 cache | Persistent volume on VM | Bind-mounted from host `f1_cache/` |
 
 ## Common Tasks
@@ -181,14 +152,12 @@ docker compose -f docker-compose.dev.yml logs -f
 docker compose -f docker-compose.dev.yml logs -f model-api
 ```
 
-### Re-seed PostgreSQL (force)
+### Reset data
 
 ```bash
-docker compose -f docker-compose.dev.yml down -v  # removes pgdata volume
+docker compose -f docker-compose.dev.yml down -v  # removes InfluxDB volume
 docker compose -f docker-compose.dev.yml up --build
 ```
-
-This drops all data and re-runs the ETL from `f1_cache/`.
 
 ### Test the model API directly
 
@@ -202,17 +171,6 @@ curl -X POST http://localhost:8080/predict-prerace \
   -d '{"drivers": [{"driver": "VER", "GridPosition": 1, "TeamTier": 1, "QualifyingDelta": 0.0}]}'
 ```
 
-### Connect to PostgreSQL
-
-```bash
-docker exec -it f1-postgres psql -U f1admin -d f1chubby
-
-# Example queries:
-SELECT count(*) FROM session_results;
-SELECT * FROM race_calendar WHERE year = 2026 ORDER BY round;
-SELECT * FROM driver_standings WHERE year = 2026 AND round = (SELECT max(round) FROM driver_standings WHERE year = 2026);
-```
-
 ### Stop everything
 
 ```bash
@@ -221,20 +179,66 @@ docker compose -f docker-compose.dev.yml down
 
 ## Troubleshooting
 
-**ETL says "Blocked by --offline" and skips sessions**
-→ The session isn't in `f1_cache/`. This is expected for future/unraced rounds. The Streamlit app will fall back to the FastF1 API for those sessions at runtime.
-
 **Model API shows "Model file missing"**
 → Check that `assets/Models/` contains the 3 `.pkl` files. If not, download from GCS:
 ```bash
-gsutil cp gs://f1chubby-model-gen-lang-client-0314607994/*.pkl assets/Models/
+gsutil cp gs://f1chubby-model-${PROJECT_ID}/*.pkl assets/Models/
 ```
 
-**Streamlit can't connect to PostgreSQL**
-→ The `postgres` container must be healthy before Streamlit starts. Check: `docker ps` — if postgres shows `(unhealthy)`, check its logs.
-
-**Streamlit doesn't start (waiting for ETL)**
-→ The ETL must exit with code 0 before Streamlit starts. Check `docker compose -f docker-compose.dev.yml logs etl` for errors. Common cause: the Streamlit Docker image doesn't have `psycopg2-binary` — verify it's in `requirements-streamlit.txt`.
-
 **Port conflict**
-→ If 8501, 8080, 5432, or 8086 are already in use, either stop the conflicting service or change the host port in `docker-compose.dev.yml` (e.g., `"5433:5432"`).
+→ If 8501, 8080, or 8086 are already in use, either stop the conflicting service or change the host port in `docker-compose.dev.yml`.
+
+---
+
+## Running Without Docker
+
+If you prefer running the Streamlit app directly on your host (e.g. for faster iteration or IDE debugging):
+
+### Prerequisites
+
+- Python 3.11+
+- Model API and InfluxDB running separately (via Docker or otherwise)
+- `f1_cache/` directory with cached session data
+- `assets/Models/` with the 3 `.pkl` files (only needed if running model-api locally too)
+
+### Setup
+
+```bash
+# 1. Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate   # Linux/macOS
+# .venv\Scripts\activate    # Windows
+
+# 2. Install dependencies
+pip install -r requirements-streamlit.txt
+
+# 3. Start supporting services (in another terminal)
+docker compose -f docker-compose.dev.yml up influxdb model-api
+
+# 4. Set environment variables
+export MODEL_API_URL=http://localhost:8080
+export INFLUXDB_URL=http://localhost:8086
+export INFLUXDB_TOKEN=f1chubby-influx-token
+export INFLUXDB_ORG=f1chubby
+export INFLUXDB_BUCKET=live_race
+
+# 5. Run Streamlit
+streamlit run main.py
+```
+
+The app is available at **http://localhost:8501**.
+
+### LOCAL_MODE (FastF1-only, no external services)
+
+If you don't need live race features and just want to browse historical data:
+
+```bash
+export LOCAL_MODE=true
+streamlit run main.py
+```
+
+This bypasses InfluxDB queries and Model API calls. Calendar, results, standings, telemetry, and lap data all load from `f1_cache/` or the FastF1 API directly.
+
+---
+
+← Back to [ReadMe.md](ReadMe.md)

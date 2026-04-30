@@ -3,19 +3,16 @@ name: Terraform
 on:
   pull_request:
     paths:
-      - 'infra/**'
+      - "infra/**"
   push:
-    branches: [main]
+    branches: [ main ]
     paths:
-      - 'infra/**'
+      - "infra/**"
 
 permissions:
   contents: read
   pull-requests: write
-
-env:
-  TF_CLOUD_ORGANIZATION: "duyle"
-  TF_WORKSPACE: "f1-chubby-data"
+  id-token: write
 
 jobs:
   terraform:
@@ -27,12 +24,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: hashicorp/setup-terraform@v3
+      - id: auth
+        name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
         with:
-          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SA_EMAIL }}
+
+      - uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Init
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=f1chubby-tfstate-${{ vars.GCP_PROJECT_ID }}" \
+            -backend-config="prefix=terraform/state"
 
       - name: Terraform Format Check
         run: terraform fmt -check -recursive

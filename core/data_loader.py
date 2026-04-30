@@ -13,8 +13,12 @@ import fastf1
 import pandas as pd
 import os
 import logging
+import threading
 
-from google.cloud import storage
+try:
+    from google.cloud import storage as _gcs_storage
+except ImportError:
+    _gcs_storage = None
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +33,38 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 fastf1.Cache.enable_cache(CACHE_DIR)
 fastf1.set_log_level('ERROR')
 
+# Override FastF1 API base URL with a proxy (e.g. Cloudflare Worker)
+# to bypass geo-blocking on cloud provider IPs
+_f1_proxy = os.environ.get("F1_API_PROXY")
+if _f1_proxy:
+    import fastf1._api
+    fastf1._api.base_url = _f1_proxy.rstrip('/')
+    logger.info("F1 API proxy: %s", fastf1._api.base_url)
+
 
 class GCStorage:
+    """Optional GCS wrapper. Disables itself after the first connection failure."""
+
     def __init__(self):
-        self.client = storage.Client()
+        self._client = None
+        self._disabled = _gcs_storage is None
+
+    @property
+    def available(self):
+        return not self._disabled
+
+    @property
+    def client(self):
+        if self._disabled:
+            raise RuntimeError("GCS is not available")
+        if self._client is None:
+            try:
+                self._client = _gcs_storage.Client()
+            except Exception as e:
+                logger.warning("GCS client init failed (disabling GCS): %s", e)
+                self._disabled = True
+                raise RuntimeError("GCS is not available") from e
+        return self._client
 
     def get_bucket(self, bucket_name):
         return self.client.get_bucket(bucket_name)
@@ -121,6 +153,8 @@ def _has_local_cache(blob_prefix):
 
 def _pull_gcs_to_local(blob_prefix):
     """Try to pull from GCS cache bucket to local cache. Returns True on success."""
+    if not gcs.available:
+        return False
     try:
         found = False
         for _ in gcs.list_blobs(GCS_CACHE_BUCKET, prefix=blob_prefix):
@@ -130,12 +164,15 @@ def _pull_gcs_to_local(blob_prefix):
             gcs.download_blob(GCS_CACHE_BUCKET, blob_prefix)
             return True
     except Exception as e:
-        logger.warning("GCS cache read failed: %s", e)
+        logger.warning("GCS cache read failed (disabling GCS): %s", e)
+        gcs._disabled = True
     return False
 
 
 def _push_local_to_gcs(blob_prefix):
     """Push local cache files to GCS cache bucket."""
+    if not gcs.available:
+        return
     blob_dir = os.path.join(CACHE_DIR, blob_prefix)
     if not os.path.isdir(blob_dir):
         return
@@ -146,26 +183,42 @@ def _push_local_to_gcs(blob_prefix):
                 blob_prefix.replace("\\", "/") + "/" + file,
                 os.path.join(blob_dir, file))
     except Exception as e:
-        logger.warning("GCS cache upload failed: %s", e)
+        logger.warning("GCS cache upload failed (disabling GCS): %s", e)
+        gcs._disabled = True
 
 
 def load(year, round_num, session_type, telemetry, weather, messages):
     blob = get_blob(year, round_num, session_type)
+    logger.info("load() year=%s round=%s type=%s blob=%s", year, round_num, session_type, blob)
 
     # 1. Local cache hit — FastF1 will use f1_cache/ automatically
     had_local = _has_local_cache(blob)
+    logger.info("local_cache=%s gcs_available=%s", had_local, gcs.available)
 
     # 2. GCS cache — pull to local if no local cache
     if not had_local:
-        _pull_gcs_to_local(blob)
+        pulled = _pull_gcs_to_local(blob)
+        logger.info("gcs_pull=%s", pulled)
 
     # 3. Load session (FastF1 uses local cache, or fetches from API)
     session = fastf1.get_session(year, round_num, session_type)
-    session.load(telemetry=telemetry, weather=weather, messages=messages)
+    logger.info("f1_api_support=%s", session.f1_api_support)
+    session.load(laps=True, telemetry=telemetry, weather=weather, messages=messages)
+    logger.info("load complete: has_laps=%s has_results=%s",
+                hasattr(session, '_laps'), hasattr(session, '_results'))
 
-    # 4. If we fetched fresh from API, push to GCS cache for next time
+    # Ensure _laps exists even when f1_api_support is False (e.g. future sessions)
+    if not hasattr(session, '_laps'):
+        from fastf1.core import Laps
+        session._laps = Laps(pd.DataFrame(), session=session)
+        logger.warning("No lap data loaded — created empty _laps fallback")
+
+    # Flag for downstream consumers to show user-facing warnings
+    session._data_unavailable = session.laps.empty
+
+    # 4. If we fetched fresh from API, push to GCS cache in background
     if not had_local:
-        _push_local_to_gcs(blob)
+        threading.Thread(target=_push_local_to_gcs, args=(blob,), daemon=True).start()
 
     return session
 

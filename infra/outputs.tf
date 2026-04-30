@@ -17,27 +17,6 @@ output "gcs_buckets" {
   value = module.storage.bucket_names
 }
 
-# --- Database ---
-output "cloudsql_instance_name" {
-  value = module.database.instance_name
-}
-
-output "cloudsql_connection_name" {
-  value = module.database.connection_name
-}
-
-output "cloudsql_public_ip" {
-  value = module.database.public_ip
-}
-
-output "cloudsql_database" {
-  value = module.database.database_name
-}
-
-output "cloudsql_user" {
-  value = module.database.db_user
-}
-
 # --- Compute ---
 output "vm_external_ip" {
   value = module.compute.vm_external_ip
@@ -67,17 +46,6 @@ output "wif_provider" {
 
 output "github_actions_sa_email" {
   value = google_service_account.github_actions.email
-}
-
-# --- Workload Identity Federation (Terraform Cloud) ---
-output "tfc_wif_provider" {
-  description = "TFC Dynamic Provider Credentials: set as TFC_GCP_PROVIDER_AUTH value"
-  value       = google_iam_workload_identity_pool_provider.tfc.name
-}
-
-output "tfc_sa_email" {
-  description = "TFC Dynamic Provider Credentials: set as TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL value"
-  value       = google_service_account.tfc.email
 }
 
 # --- Gemini API Key ---

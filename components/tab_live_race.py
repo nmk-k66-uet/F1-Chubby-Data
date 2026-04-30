@@ -13,10 +13,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
-import time
 import requests as _requests
 import altair as alt
 import plotly.graph_objects as go
+from datetime import datetime, timezone
 
 MODEL_API_URL = os.environ.get("MODEL_API_URL", "http://model-api:8080")
 INFLUXDB_URL = os.environ.get("INFLUXDB_URL", "http://influxdb:8086")
@@ -66,6 +66,15 @@ def _get_influx_client():
         return None, None
 
 
+def _is_influx_reachable():
+    """Ping InfluxDB health endpoint. Returns True if the service is up."""
+    try:
+        resp = _requests.get(f"{INFLUXDB_URL}/health", timeout=3)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
 def _fetch_live_timing_from_influxdb(race_id):
     """
     Query InfluxDB live_timing measurement for the latest lap snapshot.
@@ -77,7 +86,7 @@ def _fetch_live_timing_from_influxdb(race_id):
     try:
         flux = f'''
         from(bucket: "{INFLUXDB_BUCKET}")
-          |> range(start: -30m)
+          |> range(start: -24h)
           |> filter(fn: (r) => r._measurement == "live_timing" and r.race_id == "{race_id}")
           |> last()
           |> pivot(rowKey:["_time", "driver"], columnKey: ["_field"], valueColumn: "_value")
@@ -120,7 +129,7 @@ def _fetch_predictions_from_influxdb(race_id):
     try:
         flux = f'''
         from(bucket: "{INFLUXDB_BUCKET}")
-          |> range(start: -30m)
+          |> range(start: -24h)
           |> filter(fn: (r) => r._measurement == "predictions" and r.race_id == "{race_id}")
           |> last()
           |> pivot(rowKey:["_time", "driver"], columnKey: ["_field"], valueColumn: "_value")
@@ -268,11 +277,35 @@ def render_radar(p1_row, p2_row):
     st.plotly_chart(fig, width='stretch', config={'displayModeBar': False})
 
 
+def _data_age_seconds(df):
+    """Return the age in seconds of the most recent _time in the dataframe, or None."""
+    if df is None or df.empty or "_time" not in df.columns:
+        return None
+    latest = df["_time"].max()
+    if latest is None or pd.isna(latest):
+        return None
+    if latest.tzinfo is None:
+        latest = latest.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - latest).total_seconds()
+
+
+def _is_race_in_past(session):
+    """Check if the race date is in the past (historical race)."""
+    try:
+        event_date = session.event["EventDate"]
+        if pd.isna(event_date):
+            return False
+        if hasattr(event_date, "tzinfo") and event_date.tzinfo is not None:
+            return event_date < datetime.now(timezone.utc)
+        return event_date < datetime.now()
+    except Exception:
+        return False
+
+
 def _staleness_badge(pred_ts):
     """Return (label, color) for the prediction staleness indicator."""
     if pred_ts is None:
         return "No data", "#6c757d"
-    from datetime import datetime, timezone
     age = (datetime.now(timezone.utc) - pred_ts).total_seconds()
     if age > 30:
         return f"Stale ({int(age)}s)", "#dc3545"  # red
@@ -306,30 +339,97 @@ def fragment_live_race(session):
     """, unsafe_allow_html=True)
 
     year = st.session_state['selected_event']['year']
+    round_num = st.session_state['selected_event']['round']
     event = st.session_state['selected_event']['name']
-    race_id = f"{year}_{event}"
+    race_id = f"{year}_{round_num}"
 
     # ==========================================
-    # 1. DATA SOURCE: InfluxDB only
+    # 1. CONNECTION & DATA STATUS (separated)
     # ==========================================
-    influx_df, influx_lap, has_influx = _fetch_live_timing_from_influxdb(race_id)
+    influx_up = _is_influx_reachable()
 
-    if has_influx and influx_df is not None and not influx_df.empty:
-        live_lap_df = influx_df
-        current_lap = influx_lap
-        total_laps_est = session.laps['LapNumber'].max() if not session.laps.empty else current_lap
-        total_laps = int(total_laps_est) if pd.notna(total_laps_est) else current_lap
-    else:
-        # InfluxDB unreachable or no data
+    if not influx_up:
+        # ── STATE A: InfluxDB is down ──
         st.markdown("""
             <div style='text-align:center; padding:60px 20px;'>
-                <span class='source-badge' style='background:#dc3545; font-size:14px;'>⚫ OFFLINE</span>
-                <h3 style='margin-top:16px; color:#888;'>Live Timing Unavailable</h3>
-                <p style='color:#666;'>Cannot reach InfluxDB or no race data available.<br/>
-                Ensure InfluxDB is running and race data is being streamed.</p>
+                <span class='source-badge' style='background:#dc3545; font-size:14px;'>⚫ STREAM OFFLINE</span>
+                <h3 style='margin-top:16px; color:#888;'>InfluxDB Unreachable</h3>
+                <p style='color:#666;'>Cannot connect to the InfluxDB service.<br/>
+                Ensure InfluxDB is running and accessible at <code>{}</code>.</p>
+            </div>
+        """.format(INFLUXDB_URL), unsafe_allow_html=True)
+        return
+
+    # InfluxDB is up — try to fetch data
+    influx_df, influx_lap, has_data = _fetch_live_timing_from_influxdb(race_id)
+
+    total_laps_est = session.laps['LapNumber'].max() if not session.laps.empty else 0
+    total_laps = int(total_laps_est) if pd.notna(total_laps_est) else 0
+    race_in_past = _is_race_in_past(session)
+
+    if not has_data or influx_df is None or influx_df.empty:
+        # ── STATE B: InfluxDB is up, but no data for this race ──
+        st.markdown("""
+            <div style='text-align:center; padding:10px;'>
+                <span class='source-badge' style='background:#28a745; font-size:11px;'>● InfluxDB Connected</span>
             </div>
         """, unsafe_allow_html=True)
+
+        if race_in_past:
+            # Historical race — offer simulation
+            st.markdown(f"""
+                <div style='text-align:center; padding:40px 20px;'>
+                    <span class='source-badge' style='background:#6c757d; font-size:14px;'>📊 NO SIMULATION DATA</span>
+                    <h3 style='margin-top:16px; color:#888;'>{event}</h3>
+                    <p style='color:#666;'>This race has already taken place but no live simulation data is available.<br/>
+                    Run a simulation to replay the race with live timing and predictions.</p>
+                </div>
+            """, unsafe_allow_html=True)
+        else:
+            # Future race — hasn't started
+            st.markdown(f"""
+                <div style='text-align:center; padding:40px 20px;'>
+                    <span class='source-badge' style='background:#ffc107; font-size:14px; color:#000;'>⏳ RACE NOT STARTED</span>
+                    <h3 style='margin-top:16px; color:#888;'>{event}</h3>
+                    <p style='color:#666;'>This race hasn't happened yet.<br/>
+                    Live timing data will appear here once the race begins and data is streamed.</p>
+                </div>
+            """, unsafe_allow_html=True)
         return
+
+    # ── STATE C: InfluxDB is up AND has data ──
+    live_lap_df = influx_df
+    current_lap = influx_lap
+    if total_laps == 0:
+        total_laps = current_lap
+
+    # Show connection status
+    age = _data_age_seconds(influx_df)
+    if age is not None and age > 120 and total_laps > 0 and current_lap >= total_laps:
+        # Data is stale + final lap → finished
+        age_str = f"{int(age // 60)}m ago" if age > 60 else f"{int(age)}s ago"
+        st.markdown(f"""
+            <div style='text-align:center; padding:10px;'>
+                <span class='source-badge' style='background:#28a745; font-size:11px;'>● InfluxDB Connected</span>
+                <span class='source-badge' style='background:#6c757d; font-size:11px; margin-left:8px;'>🏁 Race Finished ({age_str})</span>
+            </div>
+        """, unsafe_allow_html=True)
+    elif age is not None and age > 120:
+        # Data is stale but not final lap → stream interrupted
+        st.markdown("""
+            <div style='text-align:center; padding:10px;'>
+                <span class='source-badge' style='background:#28a745; font-size:11px;'>● InfluxDB Connected</span>
+                <span class='source-badge' style='background:#ffc107; font-size:11px; margin-left:8px; color:#000;'>⚠ Stream Stale</span>
+            </div>
+        """, unsafe_allow_html=True)
+    else:
+        # Fresh data → live
+        st.markdown("""
+            <div style='text-align:center; padding:10px;'>
+                <span class='source-badge' style='background:#28a745; font-size:11px;'>● InfluxDB Connected</span>
+                <span class='source-badge' style='background:#28a745; font-size:11px; margin-left:8px;'>📡 Live Stream</span>
+            </div>
+        """, unsafe_allow_html=True)
 
     # Ensure prob_history exists
     if 'prob_history' not in st.session_state:
@@ -348,8 +448,6 @@ def fragment_live_race(session):
     # LEFT: LIVE TIMING TOWER (fast path)
     # ==========================================
     with col_tower:
-        st.markdown("<span class='source-badge' style='background:#28a745;'>InfluxDB Live</span>", unsafe_allow_html=True)
-
         status_color = "red" if current_lap < total_laps else "gray"
         status_text = f"LAP {current_lap}/{total_laps}" if current_lap < total_laps else "🏁 FINISHED"
         st.markdown(f"<h3 class='live-header' style='color: {status_color}; margin-top:0;'>{status_text}</h3>", unsafe_allow_html=True)

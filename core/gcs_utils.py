@@ -42,7 +42,8 @@ def load_with_gcs_cache(year, round_num, session_type, telemetry, weather, messa
     Loads F1 data using FastF1, but syncs with a Google Cloud Storage bucket
     to prevent redundant API calls to FastF1 servers across different Spark workers.
     """
-    gcs_bucket = os.environ.get("GCS_CACHE_BUCKET", "f1chubby-raw-gen-lang-client-0314607994")
+    project_id = os.environ.get("GCP_PROJECT_ID", "<PROJECT_ID>")
+    gcs_bucket = os.environ.get("GCS_CACHE_BUCKET", f"f1chubby-raw-{project_id}")
     
     schedule = get_schedule(year)
     blob_prefix = get_blob(schedule, year, round_num, session_type)

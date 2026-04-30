@@ -1,9 +1,9 @@
 terraform {
-  cloud {
-    organization = "duyle"
-    workspaces {
-      name = "f1-chubby-data"
-    }
+  # Backend configuration: use -backend-config during terraform init
+  # Example: terraform init -backend-config="bucket=f1chubby-tfstate-<PROJECT_ID>"
+  backend "gcs" {
+    bucket = ""
+    prefix = ""
   }
 
   required_version = ">= 1.5"
@@ -17,8 +17,10 @@ terraform {
 }
 
 provider "google" {
-  project = var.project_id
-  region  = var.region
+  project               = var.project_id
+  region                = var.region
+  user_project_override = true
+  billing_project       = var.project_id
 }
 
 # --- Enable required APIs ---
@@ -27,7 +29,6 @@ resource "google_project_service" "apis" {
   for_each = toset([
     "cloudresourcemanager.googleapis.com",
     "compute.googleapis.com",
-    "sqladmin.googleapis.com",
     "pubsub.googleapis.com",
     "storage.googleapis.com",
     "iam.googleapis.com",
@@ -71,17 +72,6 @@ module "storage" {
   depends_on = [google_project_service.apis]
 }
 
-module "database" {
-  source = "./modules/database"
-
-  project_id  = var.project_id
-  region      = var.region
-  db_tier     = var.db_tier
-  db_password = var.db_password
-
-  depends_on = [google_project_service.apis]
-}
-
 module "compute" {
   source = "./modules/compute"
 
@@ -93,6 +83,9 @@ module "compute" {
   gemini_api_key    = google_apikeys_key.gemini.key_string
   gcs_cache_bucket  = "f1chubby-cache-${var.project_id}"
   gcs_models_bucket = "f1chubby-model-${var.project_id}"
+  timing_viz_sub    = module.pubsub.subscription_names_map["f1-timing-viz-fast"]
+  timing_pred_sub   = module.pubsub.subscription_names_map["f1-timing-pred-slow"]
+  rc_viz_sub        = module.pubsub.subscription_names_map["f1-race-control-viz-fast"]
 
   depends_on = [google_project_service.apis]
 }
@@ -115,6 +108,8 @@ resource "google_service_account" "dataproc" {
   project      = var.project_id
   account_id   = "f1-dataproc-sa"
   display_name = "F1 Dataproc Service Account"
+
+  depends_on = [google_project_service.apis]
 }
 
 locals {
@@ -145,7 +140,7 @@ resource "google_service_account_iam_member" "github_actions_use_dataproc_sa" {
 
 resource "google_iam_workload_identity_pool" "github" {
   project                   = var.project_id
-  workload_identity_pool_id = "github-actions"
+  workload_identity_pool_id = "github-actions-v2"
   display_name              = "GitHub Actions"
 
   depends_on = [google_project_service.apis]
@@ -154,7 +149,7 @@ resource "google_iam_workload_identity_pool" "github" {
 resource "google_iam_workload_identity_pool_provider" "github" {
   project                            = var.project_id
   workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
-  workload_identity_pool_provider_id = "github-oidc"
+  workload_identity_pool_provider_id = "github-oidc-v2"
   display_name                       = "GitHub OIDC"
 
   attribute_mapping = {
@@ -163,7 +158,7 @@ resource "google_iam_workload_identity_pool_provider" "github" {
     "attribute.repository" = "assertion.repository"
   }
 
-  attribute_condition = "assertion.repository == 'nmk-k66-uet/F1-Chubby-Data'"
+  attribute_condition = "assertion.repository == '${var.github_repo}'"
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
@@ -175,13 +170,15 @@ resource "google_service_account" "github_actions" {
   project      = var.project_id
   account_id   = "github-actions-sa"
   display_name = "GitHub Actions Service Account"
+
+  depends_on = [google_project_service.apis]
 }
 
 # Allow GitHub Actions to impersonate the service account
 resource "google_service_account_iam_member" "wif_binding" {
   service_account_id = google_service_account.github_actions.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/nmk-k66-uet/F1-Chubby-Data"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_repo}"
 }
 
 # Grant the service account necessary roles
@@ -189,15 +186,17 @@ locals {
   sa_roles = [
     "roles/storage.admin",
     "roles/pubsub.admin",
-    "roles/cloudsql.admin",
     "roles/compute.admin",
+    "roles/compute.osAdminLogin",
     "roles/dataproc.admin",
     "roles/run.admin",
     "roles/artifactregistry.admin",
     "roles/iam.serviceAccountUser",
     "roles/iam.serviceAccountAdmin",
+    "roles/iam.serviceAccountTokenCreator",
     "roles/iam.workloadIdentityPoolAdmin",
     "roles/resourcemanager.projectIamAdmin",
+    "roles/serviceusage.serviceUsageAdmin",
     "roles/serviceusage.apiKeysAdmin",
   ]
 }
@@ -210,71 +209,22 @@ resource "google_project_iam_member" "github_actions_roles" {
   member  = "serviceAccount:${google_service_account.github_actions.email}"
 }
 
-# --- Workload Identity Federation for Terraform Cloud ---
-
-resource "google_iam_workload_identity_pool" "tfc" {
-  project                   = var.project_id
-  workload_identity_pool_id = "terraform-cloud"
-  display_name              = "Terraform Cloud"
-
-  depends_on = [google_project_service.apis]
-}
-
-resource "google_iam_workload_identity_pool_provider" "tfc" {
-  project                            = var.project_id
-  workload_identity_pool_id          = google_iam_workload_identity_pool.tfc.workload_identity_pool_id
-  workload_identity_pool_provider_id = "tfc-oidc"
-  display_name                       = "Terraform Cloud OIDC"
-
-  attribute_mapping = {
-    "google.subject"                        = "assertion.sub"
-    "attribute.aud"                         = "assertion.aud"
-    "attribute.terraform_workspace_id"      = "assertion.terraform_workspace_id"
-    "attribute.terraform_workspace_name"    = "assertion.terraform_workspace_name"
-    "attribute.terraform_organization_id"   = "assertion.terraform_organization_id"
-    "attribute.terraform_organization_name" = "assertion.terraform_organization_name"
-    "attribute.terraform_run_phase"         = "assertion.terraform_run_phase"
-    "attribute.terraform_full_workspace"    = "assertion.terraform_full_workspace"
-  }
-
-  attribute_condition = "assertion.sub.startsWith(\"organization:duyle:project:\")"
-
-  oidc {
-    issuer_uri = "https://app.terraform.io"
-  }
-}
-
-# Service account for Terraform Cloud
-resource "google_service_account" "tfc" {
-  project      = var.project_id
-  account_id   = "terraform-cloud-sa"
-  display_name = "Terraform Cloud Service Account"
-}
-
-# Allow Terraform Cloud to impersonate the service account
-resource "google_service_account_iam_member" "tfc_wif_binding" {
-  service_account_id = google_service_account.tfc.name
-  role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.tfc.name}/*"
-}
-
-# Grant TFC service account the same roles
-resource "google_project_iam_member" "tfc_roles" {
-  for_each = toset(local.sa_roles)
-
-  project = var.project_id
-  role    = each.value
-  member  = "serviceAccount:${google_service_account.tfc.email}"
-}
-
 # --- VM Service Account: GCS access ---
 
 resource "google_storage_bucket_iam_member" "vm_bucket_access" {
   for_each = module.storage.bucket_names
 
   bucket = each.value
-  role   = "roles/storage.objectAdmin"
+  role   = "roles/storage.admin"
   member = "serviceAccount:${module.compute.vm_service_account_email}"
+}
+
+# --- VM Service Account: Pub/Sub subscriber access ---
+
+resource "google_project_iam_member" "vm_pubsub_subscriber" {
+  project = var.project_id
+  role    = "roles/pubsub.subscriber"
+  member  = "serviceAccount:${module.compute.vm_service_account_email}"
 }
 
 # --- Gemini API Key (restricted to Generative Language API) ---
@@ -292,3 +242,4 @@ resource "google_apikeys_key" "gemini" {
 
   depends_on = [google_project_service.apis]
 }
+

@@ -37,3 +37,18 @@ variable "gcs_models_bucket" {
   type        = string
   default     = ""
 }
+
+variable "timing_viz_sub" {
+  description = "Pub/Sub subscription name for fast-path timing"
+  type        = string
+}
+
+variable "timing_pred_sub" {
+  description = "Pub/Sub subscription name for slow-path timing"
+  type        = string
+}
+
+variable "rc_viz_sub" {
+  description = "Pub/Sub subscription name for fast-path race control"
+  type        = string
+}

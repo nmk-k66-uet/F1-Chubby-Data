@@ -7,9 +7,17 @@ This is the main entry point of the Streamlit application. It initializes:
 - Page routing and navigation logic
 """
 
+import os
+import logging
 import streamlit as st
 from core.config import setup_page_config
 from components.navbar import render_navbar
+
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    force=True,
+)
 
 # 1. Universal Setup - Configure page layout and styling
 setup_page_config()

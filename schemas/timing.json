@@ -4,6 +4,8 @@
   "description": "Pub/Sub message for f1-timing topic — one record per driver per lap.",
   "type": "object",
   "required": [
+    "race_id",
+    "total_laps",
     "timestamp_ms",
     "driver_id",
     "lap_number",
@@ -18,6 +20,15 @@
     "pit_out_lap"
   ],
   "properties": {
+    "race_id": {
+      "type": "string",
+      "description": "Unique race identifier, e.g. 2026_Australian Grand Prix."
+    },
+    "total_laps": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Total number of laps in this race."
+    },
     "timestamp_ms": {
       "type": "integer",
       "description": "UTC epoch milliseconds when this timing sample was produced."

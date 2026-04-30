@@ -96,6 +96,10 @@ def render():
         st.warning("Unable to load data for this session.")
         return
 
+    if getattr(session, '_data_unavailable', False):
+        st.warning("⚠️ Detailed timing data (laps, telemetry) is not yet available for this session. "
+                   "Only basic results are shown. Data usually appears a few hours after the session ends.")
+
     drivers = session.results['Abbreviation'].dropna().unique().tolist()
 
     st.markdown("""

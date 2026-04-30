@@ -9,7 +9,7 @@ COPY app.py .
 RUN mkdir -p models
 
 ENV MODEL_DIR=/app/models
-ENV GCS_BUCKET=f1chubby-model-gen-lang-client-0314607994
+ENV GCS_BUCKET=f1chubby-model-${GCP_PROJECT_ID:-<PROJECT_ID>}
 ENV USE_GCS=true
 
 EXPOSE 8080
