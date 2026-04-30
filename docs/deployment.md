@@ -122,6 +122,51 @@ Then add the repository variable:
 | Variable | Value |
 |----------|-------|
 | `GCP_PROJECT_ID` | Your GCP project ID used by the GitHub Actions workflows |
+| `F1_API_PROXY` | *(optional)* Cloudflare Worker URL for FastF1 API proxy (see [F1 API Proxy](#f1-api-proxy-optional)) |
+
+---
+
+## F1 API Proxy (Optional)
+
+The FastF1 live timing API (`livetiming.formula1.com`) blocks requests from cloud provider IP ranges (GCP, AWS, etc.). If your VM cannot reach the API directly, deploy a Cloudflare Worker as a proxy:
+
+1. **Create the worker:**
+   ```bash
+   npm create cloudflare@latest f1-proxy -- --type=hello-world
+   cd f1-proxy
+   ```
+
+2. **Replace `src/index.js`:**
+   ```javascript
+   export default {
+     async fetch(request) {
+       const url = new URL(request.url);
+       const target = "https://livetiming.formula1.com" + url.pathname + url.search;
+       return fetch(target, {
+         headers: { "User-Agent": "Mozilla/5.0", "Accept": "*/*" },
+       });
+     },
+   };
+   ```
+
+3. **Deploy:**
+   ```bash
+   npx wrangler deploy
+   # → https://f1-proxy.<your-subdomain>.workers.dev
+   ```
+
+4. **Configure:** Add the worker URL as a GitHub Actions repository variable `F1_API_PROXY`, or set it directly in the VM's `/opt/f1chubby/.env`:
+   ```
+   F1_API_PROXY=https://f1-proxy.<your-subdomain>.workers.dev
+   ```
+
+5. **Verify from the VM:**
+   ```bash
+   curl -sI "https://f1-proxy.<your-subdomain>.workers.dev/static/2026/2026-03-29_Japanese_Grand_Prix/2026-03-29_Race/SessionInfo.jsonStream"
+   # Should return HTTP 200
+   ```
+
+The proxy is only used when `F1_API_PROXY` is set. Without it, FastF1 connects directly to the official API (works from residential IPs). Cloudflare Workers free tier allows 100k requests/day.
 
 ---
 
@@ -285,6 +330,7 @@ Five GitHub Actions workflows automate the deployment lifecycle:
 | `INFLUXDB_BUCKET` | `live_race` | InfluxDB bucket name |
 | `GCS_CACHE_BUCKET` | `f1chubby-cache-<project_id>` | GCS cache bucket for FastF1 data |
 | `GEMINI_API_KEY` | *(auto-provisioned via Terraform)* | Google Gemini API key for tactical briefing |
+| `F1_API_PROXY` | *(optional)* Cloudflare Worker URL | Proxy for FastF1 API to bypass geo-blocking on cloud IPs |
 
 ### Model API Container
 

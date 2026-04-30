@@ -117,6 +117,9 @@ All defaults are set in `docker-compose.dev.yml`. The `.env` file only needs:
 |----------|---------|---------|
 | `INFLUXDB_TOKEN` | `f1chubby-influx-token` | InfluxDB admin token |
 | `INFLUXDB_PASSWORD` | `f1chubby2026` | InfluxDB admin password |
+| `F1_API_PROXY` | *(empty — direct API access)* | Cloudflare Worker URL to proxy FastF1 API requests (see [docs/deployment.md](docs/deployment.md#f1-api-proxy-optional)) |
+
+> **Note:** GCS credentials are not required for local development. The data loader falls back to the FastF1 API when GCS is unavailable. If the FastF1 API is also blocked (e.g. cloud provider IPs), set `F1_API_PROXY` to a Cloudflare Worker proxy URL.
 
 ## Differences from Production
 
@@ -128,7 +131,7 @@ All defaults are set in `docker-compose.dev.yml`. The `.env` file only needs:
 | Source code | Baked into Docker image | Bind-mounted (hot reload) |
 | Model API mode | `uvicorn app:app` | `uvicorn app:app --reload` |
 | Streaming consumers | Run as containers (`streaming-fast`, `streaming-slow`) | Not included (use production compose or run manually) |
-| GCS auth | VM service account | Not needed |
+| GCS auth | VM service account | Not needed (GCS is optional, auto-disables without credentials) |
 | FastF1 cache | Persistent volume on VM | Bind-mounted from host `f1_cache/` |
 
 ## Common Tasks

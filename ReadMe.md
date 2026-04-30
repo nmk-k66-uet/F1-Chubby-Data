@@ -53,7 +53,7 @@ flowchart TB
     ST -- "HTTP POST<br/>/predict-*" --> MA
     ST -- "Flux query" --> IDB
     ST -- "session data<br/>(3-tier cache)" --> GCS_C
-    ST -. "fallback" .-> FF1
+    ST -. "fallback<br/>(or via CF Worker proxy)" .-> FF1
     GCS_C -. "miss → fetch" .-> FF1
 
     PS_TI --> SF
@@ -81,7 +81,7 @@ flowchart TB
 |-----------|-----------|-------------|
 | **Streamlit Dashboard** | `main.py`, `pages/`, `components/` | 5-page UI: home, race analytics, race details (8 tabs), drivers, constructors. Polls InfluxDB every 3 s for live data. |
 | **Model Serving API** | `model_serving/` | FastAPI microservice exposing `POST /predict-prerace` and `POST /predict-inrace`. Loads 3 Random Forest `.pkl` models from GCS (prod) or local bind mount (dev). |
-| **Core Backend** | `core/` | Data loading with 3-tier cache (`local → GCS → FastF1`), ML feature engineering, GCS utilities, configuration. |
+| **Core Backend** | `core/` | Data loading with 3-tier cache (`local → GCS → FastF1`), optional Cloudflare Worker proxy for geo-blocked cloud IPs, ML feature engineering, GCS utilities, configuration. |
 | **Streaming — Fast Path** | `streaming/streaming_fast.py` | Pulls from Pub/Sub `f1-timing` + `f1-race-control` subscriptions, converts to InfluxDB line protocol, writes in ~500 ms micro-batches. |
 | **Streaming — Slow Path** | `streaming/streaming_slow.py` | Pulls from Pub/Sub `f1-timing` subscription, batches by driver, calls Model API for predictions, writes results to InfluxDB (~10 s cycle). |
 | **Training Pipeline** | `spark/training_pipeline.py` | PySpark job extracting pre-race and in-race features from 2024–2026 FastF1 data, trains Random Forest models, uploads `.pkl` to GCS. |

@@ -49,6 +49,7 @@ services:
       INFLUXDB_ORG: f1chubby
       INFLUXDB_BUCKET: live_race
       GCS_BUCKET: ${GCS_BUCKET:-f1chubby-raw}
+      F1_API_PROXY: ${F1_API_PROXY:-}
     volumes:
       - ./main.py:/app/main.py
       - ./core:/app/core
