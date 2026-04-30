@@ -15,7 +15,10 @@ import os
 import logging
 import threading
 
-from google.cloud import storage
+try:
+    from google.cloud import storage as _gcs_storage
+except ImportError:
+    _gcs_storage = None
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +35,28 @@ fastf1.set_log_level('ERROR')
 
 
 class GCStorage:
+    """Optional GCS wrapper. Disables itself after the first connection failure."""
+
     def __init__(self):
-        self.client = storage.Client()
+        self._client = None
+        self._disabled = _gcs_storage is None
+
+    @property
+    def available(self):
+        return not self._disabled
+
+    @property
+    def client(self):
+        if self._disabled:
+            raise RuntimeError("GCS is not available")
+        if self._client is None:
+            try:
+                self._client = _gcs_storage.Client()
+            except Exception as e:
+                logger.warning("GCS client init failed (disabling GCS): %s", e)
+                self._disabled = True
+                raise RuntimeError("GCS is not available") from e
+        return self._client
 
     def get_bucket(self, bucket_name):
         return self.client.get_bucket(bucket_name)
@@ -122,6 +145,8 @@ def _has_local_cache(blob_prefix):
 
 def _pull_gcs_to_local(blob_prefix):
     """Try to pull from GCS cache bucket to local cache. Returns True on success."""
+    if not gcs.available:
+        return False
     try:
         found = False
         for _ in gcs.list_blobs(GCS_CACHE_BUCKET, prefix=blob_prefix):
@@ -131,12 +156,15 @@ def _pull_gcs_to_local(blob_prefix):
             gcs.download_blob(GCS_CACHE_BUCKET, blob_prefix)
             return True
     except Exception as e:
-        logger.warning("GCS cache read failed: %s", e)
+        logger.warning("GCS cache read failed (disabling GCS): %s", e)
+        gcs._disabled = True
     return False
 
 
 def _push_local_to_gcs(blob_prefix):
     """Push local cache files to GCS cache bucket."""
+    if not gcs.available:
+        return
     blob_dir = os.path.join(CACHE_DIR, blob_prefix)
     if not os.path.isdir(blob_dir):
         return
@@ -147,7 +175,8 @@ def _push_local_to_gcs(blob_prefix):
                 blob_prefix.replace("\\", "/") + "/" + file,
                 os.path.join(blob_dir, file))
     except Exception as e:
-        logger.warning("GCS cache upload failed: %s", e)
+        logger.warning("GCS cache upload failed (disabling GCS): %s", e)
+        gcs._disabled = True
 
 
 def load(year, round_num, session_type, telemetry, weather, messages):
@@ -162,7 +191,12 @@ def load(year, round_num, session_type, telemetry, weather, messages):
 
     # 3. Load session (FastF1 uses local cache, or fetches from API)
     session = fastf1.get_session(year, round_num, session_type)
-    session.load(telemetry=telemetry, weather=weather, messages=messages)
+    session.load(laps=True, telemetry=telemetry, weather=weather, messages=messages)
+
+    # Ensure _laps exists even when f1_api_support is False (e.g. future sessions)
+    if not hasattr(session, '_laps'):
+        from fastf1.core import Laps
+        session._laps = Laps(pd.DataFrame(), session=session)
 
     # 4. If we fetched fresh from API, push to GCS cache in background
     if not had_local:

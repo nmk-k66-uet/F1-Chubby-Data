@@ -236,8 +236,9 @@ def generate_and_cache_replay_payload(session, max_lap_avail, cache_path, blob):
         json.dump(payload, f, ensure_ascii=False)
 
     try:
-        file_name = cache_path.split("\\")[-1]
-        gcs.upload_file(GCS_CACHE_BUCKET, blob_destination=blob + "/" + file_name, file_path=cache_path, content_type = "application/json")
+        if gcs.available:
+            file_name = cache_path.split("\\")[-1]
+            gcs.upload_file(GCS_CACHE_BUCKET, blob_destination=blob + "/" + file_name, file_path=cache_path, content_type = "application/json")
     except Exception as e:
         logger.warning("Failed to upload replay JSON to GCS: %s", e)
         
@@ -263,7 +264,10 @@ def fragment_replay_continuous(session, year, round_num, session_code):
     cache_path = os.path.join(CACHE_DIR, blob, cache_filename)
     blob_file = (blob + "/" + cache_filename).replace("\\", "/")
 
-    is_exits = gcs.check_blob_exists(GCS_CACHE_BUCKET, blob_file)
+    try:
+        is_exits = gcs.available and gcs.check_blob_exists(GCS_CACHE_BUCKET, blob_file)
+    except Exception:
+        is_exits = False
 
     if 'js_payload' not in st.session_state or st.session_state.get('replay_session_id') != cache_path:
         # 1. Try local file first

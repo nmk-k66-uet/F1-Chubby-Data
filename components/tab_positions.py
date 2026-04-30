@@ -59,6 +59,9 @@ def fragment_positions(session, drivers, session_name):
         else:
             fig_pos = go.Figure()
             all_laps = session.laps
+            if all_laps.empty:
+                st.info("No lap data available for this session.")
+                return
             team_count = {}
             for drv in selected_drivers:
                 drv_laps = all_laps.pick_drivers(drv).dropna(subset=['Position'])
