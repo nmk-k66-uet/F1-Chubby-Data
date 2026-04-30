@@ -181,17 +181,23 @@ def _push_local_to_gcs(blob_prefix):
 
 def load(year, round_num, session_type, telemetry, weather, messages):
     blob = get_blob(year, round_num, session_type)
+    logger.info("load() year=%s round=%s type=%s blob=%s", year, round_num, session_type, blob)
 
     # 1. Local cache hit — FastF1 will use f1_cache/ automatically
     had_local = _has_local_cache(blob)
+    logger.info("local_cache=%s gcs_available=%s", had_local, gcs.available)
 
     # 2. GCS cache — pull to local if no local cache
     if not had_local:
-        _pull_gcs_to_local(blob)
+        pulled = _pull_gcs_to_local(blob)
+        logger.info("gcs_pull=%s", pulled)
 
     # 3. Load session (FastF1 uses local cache, or fetches from API)
     session = fastf1.get_session(year, round_num, session_type)
+    logger.info("f1_api_support=%s", session.f1_api_support)
     session.load(laps=True, telemetry=telemetry, weather=weather, messages=messages)
+    logger.info("load complete: has_laps=%s has_results=%s",
+                hasattr(session, '_laps'), hasattr(session, '_results'))
 
     # Ensure _laps exists even when f1_api_support is False (e.g. future sessions)
     if not hasattr(session, '_laps'):
