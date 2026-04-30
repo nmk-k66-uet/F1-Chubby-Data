@@ -33,6 +33,14 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 fastf1.Cache.enable_cache(CACHE_DIR)
 fastf1.set_log_level('ERROR')
 
+# Override FastF1 API base URL with a proxy (e.g. Cloudflare Worker)
+# to bypass geo-blocking on cloud provider IPs
+_f1_proxy = os.environ.get("F1_API_PROXY")
+if _f1_proxy:
+    import fastf1._api
+    fastf1._api.base_url = _f1_proxy.rstrip('/')
+    logger.info("F1 API proxy: %s", fastf1._api.base_url)
+
 
 class GCStorage:
     """Optional GCS wrapper. Disables itself after the first connection failure."""
@@ -203,6 +211,10 @@ def load(year, round_num, session_type, telemetry, weather, messages):
     if not hasattr(session, '_laps'):
         from fastf1.core import Laps
         session._laps = Laps(pd.DataFrame(), session=session)
+        logger.warning("No lap data loaded — created empty _laps fallback")
+
+    # Flag for downstream consumers to show user-facing warnings
+    session._data_unavailable = session.laps.empty
 
     # 4. If we fetched fresh from API, push to GCS cache in background
     if not had_local:

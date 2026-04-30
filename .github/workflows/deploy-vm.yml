@@ -67,4 +67,9 @@ jobs:
           gcloud compute ssh ${{ env.VM_NAME }} \
             --zone ${{ env.ZONE }} \
             --quiet \
-            --command "cp /opt/f1chubby/.env ~/app/.env && cd ~/app && sudo docker compose up -d --build --remove-orphans"
+            --command "
+              cp /opt/f1chubby/.env ~/app/.env
+              # Append proxy setting if configured
+              grep -q '^F1_API_PROXY=' ~/app/.env || echo 'F1_API_PROXY=${{ vars.F1_API_PROXY }}' >> ~/app/.env
+              cd ~/app && sudo docker compose up -d --build --remove-orphans
+            "

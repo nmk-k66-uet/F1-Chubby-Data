@@ -46,6 +46,7 @@ services:
       INFLUXDB_BUCKET: live_race
       GCS_CACHE_BUCKET: ${GCS_CACHE_BUCKET:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      F1_API_PROXY: ${F1_API_PROXY:-}
     volumes:
       - f1-cache:/app/f1_cache
     depends_on:
