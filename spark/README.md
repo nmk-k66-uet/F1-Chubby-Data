@@ -49,7 +49,7 @@ gcloud dataproc clusters create f1-chubby-spark \
   --master-boot-disk-size 50GB \
   --image-version 2.1-debian11 \
   --initialization-actions gs://goog-dataproc-initialization-actions-asia-southeast1/python/pip-install.sh \
-  --metadata 'PIP_PACKAGES=fastf1 numpy<2 influxdb-client requests' \
+  --metadata 'PIP_PACKAGES=fastf1 numpy<2 scikit-learn==1.7.2 joblib==1.5.3 influxdb-client requests' \
   --max-idle 600s \
   --project ${PROJECT_ID} \
   --bucket f1chubby-dataproc-staging-${PROJECT_ID}
