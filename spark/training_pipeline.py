@@ -476,7 +476,7 @@ grid_pre.fit(X_train_pre, y_train_pre)
 
 
 generate_report(grid_pre, X_test_pre, y_test_pre, "F1 PRE-RACE PODIUM", 'pre_race_metrics.txt')
-joblib.dump(grid_pre.best_estimator_, 'pre_race_model.pkl')
+joblib.dump(grid_pre.best_estimator_, 'podium_model.pkl')
 
 
 #In-Race Training
@@ -492,14 +492,14 @@ X_train_in, X_test_in, y_train_win, y_test_win, y_train_pod, y_test_pod = train_
 
 print("[ML] Tuning In-Race Win Model...")
 base_win = RandomForestClassifier(random_state=42, class_weight='balanced')
-search_win = RandomizedSearchCV(base_win, param_distributions={'n_estimators': [100], 'max_depth': [8, 12]}, n_iter=2, cv=3, scoring='f1', n_jobs=-1, random_state=42)
+search_win = RandomizedSearchCV(base_win, param_distributions={'n_estimators': [100, 150], 'max_depth': [8, 12, 15], 'min_samples_split': [5, 10]}, n_iter=5, cv=3, scoring='f1', n_jobs=-1, random_state=42)
 search_win.fit(X_train_in, y_train_win)
 joblib.dump(search_win.best_estimator_, 'in_race_win_model.pkl')
 generate_report(search_win, X_test_in, y_test_win, "F1 IN-RACE WIN", 'in_race_win_metrics.txt')
 
 print("[ML] Tuning In-Race Podium Model...")
 base_pod = RandomForestClassifier(random_state=42, class_weight='balanced')
-search_pod = RandomizedSearchCV(base_pod, param_distributions={'n_estimators': [100], 'max_depth': [8, 12]}, n_iter=2, cv=3, scoring='f1', n_jobs=-1, random_state=42)
+search_pod = RandomizedSearchCV(base_pod, param_distributions={'n_estimators': [100, 150], 'max_depth': [8, 12, 15], 'min_samples_split': [5, 10]}, n_iter=5, cv=3, scoring='f1', n_jobs=-1, random_state=42)
 search_pod.fit(X_train_in, y_train_pod)
 joblib.dump(search_pod.best_estimator_, 'in_race_podium_model.pkl')
 generate_report(search_pod, X_test_in, y_test_pod, "F1 IN-RACE PODIUM", 'in_race_podium_metrics.txt')
@@ -518,7 +518,7 @@ def upload_model(file_name):
     except Exception as e:
         print(f"Failed to upload {file_name}: {e}")
 
-upload_model('pre_race_model.pkl')
+upload_model('podium_model.pkl')
 upload_model('pre_race_metrics.txt')
 upload_model('in_race_win_model.pkl')
 upload_model('in_race_win_metrics.txt')
