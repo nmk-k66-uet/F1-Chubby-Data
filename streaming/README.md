@@ -113,10 +113,6 @@ python streaming/streaming_slow.py \
 | `live_race_control` | `race_id`, `category` | `message`, `flag`, `elapsed_sec` | Fast path |
 | `predictions` | `race_id`, `driver` | `win_prob`, `podium_prob`, `lap_number` | Slow path |
 
-## Relationship to `spark/` Directory
-
-The `streaming/` directory contains **Docker-packaged** consumers using the plain Python Pub/Sub client. The `spark/` directory contains equivalent Spark-based versions designed to run on **Google Dataproc**. Both consume the same Pub/Sub subscriptions and write to the same InfluxDB measurements.
-
 ---
 
 ← Back to [ReadMe.md](../ReadMe.md)

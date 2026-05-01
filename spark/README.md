@@ -8,8 +8,6 @@ PySpark jobs designed to run on **Google Dataproc**. This directory contains the
 |------|-------------|
 | `training_pipeline.py` | Extracts pre-race and in-race features from 2024–2026 FastF1 data, trains 3 Random Forest models, uploads `.pkl` files to GCS |
 
-> **Note:** The `streaming/` directory at the repo root contains Docker-packaged versions of the streaming jobs. For streaming consumers, use the plain Python Pub/Sub implementations in the `streaming/` directory instead.
-
 ## Training Pipeline
 
 ### What It Does
@@ -76,21 +74,6 @@ spark-submit spark/training_pipeline.py
 ```
 
 Local mode auto-detects the platform and adjusts Spark configuration. GCS authentication requires a service account JSON key at the path configured in the script.
-
-## Streaming Jobs on Dataproc
-
-The Spark streaming jobs (`streaming_fast.py`, `streaming_slow.py`) can be submitted to Dataproc similarly:
-
-```bash
-gcloud dataproc jobs submit pyspark \
-  gs://f1chubby-dataproc-staging-${PROJECT_ID}/spark/streaming_fast.py \
-  --cluster f1-chubby-spark \
-  --region asia-southeast1 \
-  --project ${PROJECT_ID} \
-  -- --project ${PROJECT_ID} \
-     --influxdb-url http://<VM_IP>:8086 \
-     --influxdb-token f1chubby-influx-token
-```
 
 ---
 

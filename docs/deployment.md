@@ -286,7 +286,7 @@ gcloud compute ssh f1-chubby-vm --zone asia-southeast1-b -- \
 
 ## CI/CD Pipelines
 
-Five GitHub Actions workflows automate the deployment lifecycle:
+Four GitHub Actions workflows automate the deployment lifecycle:
 
 ### deploy-vm.yml — Application Deployment
 

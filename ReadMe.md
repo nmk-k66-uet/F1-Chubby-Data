@@ -181,8 +181,6 @@ F1-Chubby-Data/
 │
 ├── spark/                       # Spark jobs (run on Dataproc)
 │   ├── training_pipeline.py     # Feature extraction + model training → GCS
-│   ├── streaming_fast.py        # Dataproc version of fast consumer
-│   ├── streaming_slow.py        # Dataproc version of slow consumer
 │   └── README.md                # Spark job execution guide
 │
 ├── scripts/                     # Operational scripts
