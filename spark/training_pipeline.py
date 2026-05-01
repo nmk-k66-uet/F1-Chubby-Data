@@ -116,13 +116,15 @@ def extract_pre_race_features(iterator):
             try:
                 schedule = get_schedule(year)
                 if schedule.empty:
+                    print(f"[PRE-RACE] No schedule found for year {year}")
                     continue
                 completed_events = schedule[
                     (schedule["EventDate"] < datetime.now())
                     & (schedule["RoundNumber"] > 0)
                 ]
+                print(f"[PRE-RACE] Year {year}: Found {len(completed_events)} completed events")
             except Exception as e:
-                print(f"Error fetching schedule for {year}: {e}")
+                print(f"[PRE-RACE] Error fetching schedule for {year}: {e}")
                 continue
 
             driver_points = {}
@@ -241,6 +243,7 @@ def extract_pre_race_features(iterator):
                         }
                     )
 
+        print(f"[PRE-RACE] Worker completed: {len(batch_features)} feature rows extracted")
         yield pd.DataFrame(batch_features)
 
 
@@ -289,12 +292,15 @@ def extract_in_race_features(iterator):
             try:
                 schedule = get_schedule(year)
                 if schedule.empty:
+                    print(f"[IN-RACE] No schedule found for year {year}")
                     continue
                 completed_events = schedule[
                     (schedule["EventDate"] < datetime.now())
                     & (schedule["RoundNumber"] > 0)
                 ]
-            except:
+                print(f"[IN-RACE] Year {year}: Found {len(completed_events)} completed events")
+            except Exception as e:
+                print(f"[IN-RACE] Error getting schedule for year {year}: {e}")
                 continue
 
             for _, event in completed_events.iterrows():
@@ -316,7 +322,10 @@ def extract_in_race_features(iterator):
                     continue
 
                 if laps.empty or results.empty:
+                    print(f"[IN-RACE] {year} R{round_num}: Empty laps={laps.empty} or results={results.empty}, skipping")
                     continue
+
+                print(f"[IN-RACE] {year} R{round_num}: Processing {len(laps)} laps")
 
                 final_positions = {}
                 for _, r_row in results.iterrows():
@@ -360,7 +369,8 @@ def extract_in_race_features(iterator):
                             'IsPitOut': int(is_pit_out),
                             'FinalPosition': final_positions[drv]
                         })
-                        
+
+        print(f"[IN-RACE] Worker completed: {len(batch_features)} feature rows extracted")
         yield pd.DataFrame(batch_features)
 # ==========================================
 # 3. Distribute the Workload across Spark
@@ -482,7 +492,17 @@ joblib.dump(grid_pre.best_estimator_, 'podium_model.pkl')
 #In-Race Training
 print("[ML] Reading In-Race features...")
 in_race_df = spark.read.csv(f"gs://{RAW_BUCKET}/processed_features/in_race_features", header=True, inferSchema=True).toPandas()
+print(f"[ML] Loaded {len(in_race_df)} in-race feature rows before cleaning")
 in_race_df = in_race_df.dropna(subset=['CurrentPosition', 'GapToLeader', 'TyreLife'])
+print(f"[ML] {len(in_race_df)} in-race feature rows after dropping NaN values")
+
+if len(in_race_df) == 0:
+    raise ValueError(
+        "In-race feature extraction produced 0 rows! "
+        "Check if: (1) GCS bucket has cached F1 data, "
+        "(2) FastF1 API is accessible, "
+        "(3) Worker logs for errors during data extraction."
+    )
 
 X_in = in_race_df[['LapFraction', 'CurrentPosition', 'GapToLeader', 'TyreLife', 'CompoundIdx', 'IsPitOut']]
 y_win = (in_race_df['FinalPosition'] == 1).astype(int)
