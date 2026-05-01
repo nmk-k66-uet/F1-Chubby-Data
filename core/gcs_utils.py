@@ -37,13 +37,24 @@ def get_blob(schedule, year, round_num, session_type):
     blob = f"{year}/{event_date}_{event_name}/{sub_event}"
     return blob
 
-def load_with_gcs_cache(year, round_num, session_type, telemetry, weather, messages, cache_dir):
+def load_with_gcs_cache(year, round_num, session_type, telemetry, weather, messages, cache_dir, project_id, gcs_bucket=None):
     """
     Loads F1 data using FastF1, but syncs with a Google Cloud Storage bucket
     to prevent redundant API calls to FastF1 servers across different Spark workers.
+
+    Args:
+        year: Season year
+        round_num: Round number
+        session_type: Session type code (e.g., 'R', 'Q', 'FP2')
+        telemetry: Whether to load telemetry data
+        weather: Whether to load weather data
+        messages: Whether to load race messages
+        cache_dir: Local cache directory path
+        project_id: GCP project ID (required)
+        gcs_bucket: GCS bucket name (optional, defaults to f"f1chubby-raw-{project_id}")
     """
-    project_id = os.environ.get("GCP_PROJECT_ID", "<PROJECT_ID>")
-    gcs_bucket = os.environ.get("GCS_CACHE_BUCKET", f"f1chubby-raw-{project_id}")
+    if gcs_bucket is None:
+        gcs_bucket = f"f1chubby-raw-{project_id}"
     
     schedule = get_schedule(year)
     blob_prefix = get_blob(schedule, year, round_num, session_type)
