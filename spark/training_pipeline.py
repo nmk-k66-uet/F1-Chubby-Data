@@ -99,6 +99,8 @@ def extract_pre_race_features(iterator):
             weather,
             messages,
             cache_dir=unique_cache_dir,
+            project_id=PROJECT_ID,
+            gcs_bucket=RAW_BUCKET,
         )
 
     fastf1.Cache.enable_cache(unique_cache_dir)
