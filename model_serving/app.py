@@ -65,7 +65,13 @@ def _download_from_gcs():
 
 
 def _load_models():
-    """Load model artifacts from MODEL_DIR into memory."""
+    """Load model artifacts from MODEL_DIR into memory.
+
+    Raises:
+        RuntimeError: If any required model file is missing, causing app to fail and restart.
+    """
+    missing_models = []
+
     for key, fname in [
         ("pre_race", PRE_RACE_MODEL_FILE),
         ("in_race_win", IN_RACE_WIN_MODEL_FILE),
@@ -76,7 +82,14 @@ def _load_models():
             models[key] = joblib.load(path)
             logger.info("Loaded model: %s from %s", key, path)
         else:
-            logger.warning("Model file missing: %s", path)
+            logger.error("CRITICAL: Model file missing: %s", path)
+            missing_models.append(fname)
+
+    if missing_models:
+        raise RuntimeError(
+            f"Failed to load required models: {', '.join(missing_models)}. "
+            f"App will restart to retry loading from GCS."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -132,8 +145,21 @@ class PreRaceRequest(BaseModel):
 @app.get("/health")
 def health():
     loaded = all(m is not None for m in models.values())
+    status = "healthy" if loaded else "degraded"
+
+    if not loaded:
+        # Return 503 Service Unavailable if models aren't loaded
+        # This will trigger health check failure and container restart
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": status,
+                "models_loaded": {k: (v is not None) for k, v in models.items()},
+            }
+        )
+
     return {
-        "status": "healthy" if loaded else "degraded",
+        "status": status,
         "models_loaded": {k: (v is not None) for k, v in models.items()},
     }
 
