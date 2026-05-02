@@ -240,3 +240,14 @@ gcs-key/key-gcs.json
 gcs-key/*
 f1_cache_*
 local_test_output/*
+
+# Windows Zone.Identifier files
+*.Zone.Identifier
+
+# Downloaded logs and test outputs
+downloaded-logs-*.json
+processed_features_*.csv
+
+# Service account keys (sensitive)
+scripts/service-account-key.json
+scripts/application_default_credentials.json
