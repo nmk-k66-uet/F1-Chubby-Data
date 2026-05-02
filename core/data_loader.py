@@ -196,6 +196,7 @@ def load(year, round_num, session_type, telemetry, weather, messages):
     logger.info("local_cache=%s gcs_available=%s", had_local, gcs.available)
 
     # 2. GCS cache — pull to local if no local cache
+    pulled = False
     if not had_local:
         pulled = _pull_gcs_to_local(blob)
         logger.info("gcs_pull=%s", pulled)
@@ -217,7 +218,7 @@ def load(year, round_num, session_type, telemetry, weather, messages):
     session._data_unavailable = session.laps.empty
 
     # 4. If we fetched fresh from API, push to GCS cache in background
-    if not had_local:
+    if not had_local and not pulled:
         threading.Thread(target=_push_local_to_gcs, args=(blob,), daemon=True).start()
 
     return session
