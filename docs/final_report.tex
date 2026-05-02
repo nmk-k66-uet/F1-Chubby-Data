@@ -73,7 +73,7 @@ Trong những năm gần đây, các đội đua F1 đã đầu tư mạnh vào 
 
 \begin{enumerate}
     \item \textbf{Thu thập và xử lý dữ liệu quy mô lớn}: Tích hợp FastF1 API, xây dựng cache 3 tầng (local, GCS, API) để tối ưu thời gian tải.
-    \item \textbf{Xử lý phân tán với Spark}: Huấn luyện mô hình ML trên dữ liệu lịch sử 2024-2026 với feature engineering pipeline trên Google Dataproc.
+    \item \textbf{Xử lý phân tán với Spark}: Huấn luyện mô hình ML trên dữ liệu lịch sử 2022-2025 với two-job feature extraction và training pipeline trên Google Dataproc.
     \item \textbf{Stream processing real-time}: Xây dựng kiến trúc dual-path với Pub/Sub và InfluxDB, đạt latency < 1 giây cho visualization path.
     \item \textbf{ML model serving}: Triển khai FastAPI microservice phục vụ 3 Random Forest models với normalization để dự đoán xác suất thắng/podium.
     \item \textbf{Infrastructure as Code}: Quản lý toàn bộ GCP resources qua Terraform và tự động hóa deployment với GitHub Actions.
@@ -306,24 +306,48 @@ Configuration highlights:
 
 Cluster startup time ~3 phút. Job submission qua \texttt{gcloud dataproc jobs submit pyspark} với \texttt{--py-files} chứa \texttt{core/} dependencies.
 
-\subsection{Pipeline Feature Engineering}
+\subsection{Two-Job Training Architecture}
 
-\texttt{spark/training\_pipeline.py} extract features từ FastF1 sessions cho 2024-2026 seasons. Pipeline gồm 3 stages:
+Pipeline được tách thành 2 independent Spark jobs để improve debugging và iteration speed:
 
-\textbf{Stage 1 - Data Collection}:
+\textbf{Job 1 - Feature Extraction} (\texttt{feature\_extraction\_job.py}):
+\begin{itemize}
+    \item Reads FastF1 cache from GCS (zero API calls)
+    \item Processes 2022-2025 seasons in parallel (4 partitions)
+    \item Extracts features using \texttt{mapInPandas}
+    \item Outputs CSV to \texttt{gs://f1chubby-raw/processed\_features/}
+\end{itemize}
+
+\textbf{Job 2 - Model Training} (\texttt{model\_training\_job.py}):
+\begin{itemize}
+    \item Reads feature CSVs from GCS
+    \item Trains 3 Random Forest models with GridSearchCV/RandomizedSearchCV
+    \item Validates sklearn version compatibility
+    \item Uploads \texttt{.pkl} files to \texttt{gs://f1chubby-model/}
+\end{itemize}
+
+Benefits:
+\begin{itemize}
+    \item Re-train models without re-extracting features (saves 10-15 min)
+    \item Inspect/validate feature CSVs between jobs
+    \item Clear separation: data engineering vs machine learning
+\end{itemize}
+
+\textbf{Job 1 Parallel Processing}:
 \begin{lstlisting}[language=Python]
-seasons = [2024, 2025, 2026]
-for year in seasons:
-    schedule = fastf1.get_event_schedule(year)
-    for event in schedule:
-        quali = fastf1.get_session(
-          year, event, 'Q')
-        race = fastf1.get_session(
-          year, event, 'R')
-        # Load + cache to GCS
+# Each Spark worker processes one year
+years = [(2022,), (2023,), (2024,), (2025,)]
+df_years = spark.createDataFrame(years, ["Year"])
+df_years = df_years.repartition(4)
+
+# Extract features in parallel
+df_pre_race = df_years.mapInPandas(
+    extract_pre_race_features, schema)
+df_in_race = df_years.mapInPandas(
+    extract_in_race_features, schema)
 \end{lstlisting}
 
-\textbf{Stage 2 - Pre-Race Features}:
+\textbf{Pre-Race Features}:
 Extracted từ qualifying và FP2 sessions:
 \begin{enumerate}
     \item \textbf{GridPosition}: Vị trí xuất phát (1-20).
@@ -344,7 +368,7 @@ pace = valid_laps.groupby('Driver')
   ['LapTime'].mean()
 \end{lstlisting}
 
-\textbf{Stage 3 - In-Race Features}:
+\textbf{In-Race Features}:
 Extracted từng lap của mỗi driver trong race:
 \begin{enumerate}
     \item \textbf{LapFraction}: Race progress (0.0-1.0).
@@ -361,64 +385,100 @@ Labels (target):
     \item \textbf{Win}: 1 if finish position = 1, else 0.
 \end{itemize}
 
-\subsection{Model Training Workflow}
+\subsection{Model Training Workflow (Job 2)}
 
-3 Random Forest classifiers được train riêng biệt:
+Job 2 loads feature CSVs và trains 3 Random Forest classifiers:
 
-\textbf{Pre-Race Podium Model}:
+\textbf{Pre-Race Podium Model - GridSearchCV}:
 \begin{lstlisting}[language=Python]
-rf_podium = RandomForestClassifier(
-    n_estimators=200,
-    max_depth=10,
-    min_samples_split=5,
-    class_weight='balanced'
+base_pre = RandomForestClassifier(
+    random_state=42,
+    class_weight='balanced')
+grid_pre = GridSearchCV(
+    base_pre,
+    param_grid={
+        'n_estimators': [50,100,150,200],
+        'max_depth': [4,6,8,10],
+        'min_samples_split': [2,5,10],
+        'min_samples_leaf': [1,2,4],
+        'bootstrap': [True, False]
+    },
+    cv=5, scoring='f1', n_jobs=-1
 )
-rf_podium.fit(X_prerace, y_podium)
-\end{lstlisting}
-
-Hyperparameters chọn qua GridSearchCV (5-fold CV) trên training set. \texttt{class\_weight='balanced'} xử lý imbalance (only 3/20 drivers podium mỗi race).
-
-\textbf{In-Race Win \& Podium Models}:
-\begin{lstlisting}[language=Python]
-rf_win = RandomForestClassifier(
-    n_estimators=150,
-    max_depth=12
-)
-rf_podium = RandomForestClassifier(
-    n_estimators=150,
-    max_depth=12
-)
-\end{lstlisting}
-
-In-race models train trên toàn bộ laps dataset (~20,000 samples từ 3 seasons × ~20 races × ~20 drivers × ~50 laps). Feature importance analysis cho thấy \texttt{LapFraction}, \texttt{CurrentPosition}, và \texttt{GapToLeader} là top 3 predictors.
-
-Trained models export qua joblib:
-\begin{lstlisting}[language=Python]
-joblib.dump(rf_podium,
+grid_pre.fit(X_train_pre, y_train_pre)
+joblib.dump(grid_pre.best_estimator_,
   'podium_model.pkl')
-# Upload to GCS
-gcs_client.upload_blob(
-  bucket='f1chubby-model',
-  source='podium_model.pkl',
-  dest='podium_model.pkl'
-)
 \end{lstlisting}
+
+GridSearchCV với 5-fold CV tìm best hyperparameters. \texttt{class\_weight='balanced'} xử lý imbalance (only 3/20 drivers podium mỗi race).
+
+\textbf{In-Race Models - RandomizedSearchCV}:
+\begin{lstlisting}[language=Python]
+base_win = RandomForestClassifier(
+    random_state=42,
+    class_weight='balanced')
+search_win = RandomizedSearchCV(
+    base_win,
+    param_distributions={
+        'n_estimators': [100, 150],
+        'max_depth': [8, 12, 15],
+        'min_samples_split': [5, 10]
+    },
+    n_iter=5, cv=3, scoring='f1'
+)
+search_win.fit(X_train_in, y_train_win)
+\end{lstlisting}
+
+In-race models train trên toàn bộ laps dataset (~30,000 samples từ 4 seasons × ~20 races × ~20 drivers × ~50 laps). RandomizedSearchCV faster than GridSearchCV for large parameter space.
+
+\textbf{Model Validation}:
+\begin{lstlisting}[language=Python]
+# Test reload + predict to catch sklearn
+# version mismatch before deployment
+for model_path in model_files:
+    model = joblib.load(model_path)
+    X_test = pd.DataFrame([[0.5]*n_features])
+    prediction = model.predict_proba(X_test)
+    # Raises error if incompatible
+\end{lstlisting}
+
+Validation prevents deploying models trained with different sklearn version than serving API.
 
 \subsection{Spark Execution Plan}
 
-PySpark job chạy với configuration:
+\textbf{Job 1 Configuration}:
 \begin{lstlisting}[language=Python]
 spark = SparkSession.builder \
-    .appName("F1_Training") \
-    .config("spark.executor.memory", "4g") \
-    .config("spark.executor.cores", "2") \
-    .config("spark.default.parallelism", "8") \
+    .appName("F1_Feature_Extraction") \
     .getOrCreate()
+
+# Distribute 4 years across workers
+# With 2 workers: each processes 2 years
+years = [(2022,), (2023,), (2024,), (2025,)]
+df_years = spark.createDataFrame(
+    years, ["Year"]).repartition(4)
+
+# mapInPandas runs on each partition
+df_pre = df_years.mapInPandas(
+    extract_pre_race_features, schema)
 \end{lstlisting}
 
-Data loading sử dụng Spark DataFrame cho parallel read từ GCS cache. Feature engineering apply qua UDFs (user-defined functions) với broadcast variables cho team tier mapping.
+Feature extraction uses \texttt{mapInPandas} cho parallel processing. Mỗi worker downloads cache cho assigned years, extracts features, returns Pandas DataFrame. Spark combines results và writes to GCS.
 
-Training không distribute (scikit-learn chạy trên driver node), nhưng data preparation benefit từ Spark parallelism. Với 2 workers × 2 cores, ETL phase hoàn thành trong ~15 phút cho 3 seasons data.
+\textbf{Job 2 Configuration}:
+\begin{lstlisting}[language=Python]
+spark = SparkSession.builder \
+    .appName("F1_Model_Training") \
+    .getOrCreate()
+
+# Load features from GCS
+pre_race_df = spark.read.csv(
+    "gs://.../pre_race_features",
+    header=True, inferSchema=True
+).toPandas()
+\end{lstlisting}
+
+Training không distribute (scikit-learn chạy trên driver node), nhưng feature loading benefit từ Spark's parallel read. Với 2 workers × 2 cores, Job 1 hoàn thành trong ~12 phút cho 4 years data, Job 2 trong ~5 phút.
 
 \section{Xử Lý Luồng Dữ Liệu Thời Gian Thực}
 
@@ -1158,15 +1218,15 @@ FastF1 API & 5-15s & 1\% \\
 
 \textbf{Spark Training}:
 \begin{itemize}
-    \item ETL phase: 12 minutes (2024-2026 data)
-    \item Training phase: 3 minutes (3 models sequential)
-    \item Total job time: 15 minutes on 1+2 cluster
+    \item Job 1 (Feature Extraction): 12 minutes (2022-2025 data, 4 years)
+    \item Job 2 (Model Training): 5 minutes (3 models with hyperparameter tuning)
+    \item Total pipeline time: ~17 minutes (Job 1 + Job 2)
     \item Cost per training run: \$0.11
 \end{itemize}
 
 \subsection{Model Accuracy}
 
-Cross-validation results trên historical data (2024-2026):
+Cross-validation results trên historical data (2022-2025):
 
 \textbf{Pre-Race Podium Model}:
 \begin{itemize}

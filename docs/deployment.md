@@ -220,10 +220,21 @@ sudo docker compose up -d --build --remove-orphans
 
 ## Step 5: Train / Retrain Models
 
-Trigger the `deploy-dataproc.yml` workflow:
+The training pipeline uses a two-job workflow. Trigger the `deploy-dataproc.yml` workflow twice:
+
+**Step 5.1: Feature Extraction** (~10-15 min)
+1. Go to **Actions** → **Deploy Dataproc Jobs** → **Run workflow**
+2. Select `feature_extraction` as the job type
+3. Output: `gs://f1chubby-raw-<project_id>/processed_features/` (pre_race & in_race CSVs)
+
+**Step 5.2: Model Training** (~5-10 min)
 1. Go to **Actions** → **Deploy Dataproc Jobs** → **Run workflow**
 2. Select `training` as the job type
-3. The workflow creates a Dataproc cluster (auto-deletes after 10 min idle), submits the training pipeline, and uploads new `.pkl` files to GCS
+3. Output: `gs://f1chubby-model-<project_id>/` (3 models + 3 metrics files)
+
+The workflow creates a Dataproc cluster (1 master + 2 workers, auto-deletes after 10 min idle), submits the selected job, and uploads results to GCS.
+
+**Benefits:** You can re-run Job 2 (training) without re-running Job 1 (feature extraction) to test different hyperparameters or algorithms, saving 10-15 minutes per iteration.
 
 After training completes, restart the model-api container on the VM to pick up new models:
 
@@ -297,9 +308,10 @@ Four GitHub Actions workflows automate the deployment lifecycle:
 ### deploy-dataproc.yml — Spark Job Submission
 
 - **Trigger:** Manual dispatch only (`workflow_dispatch`)
-- **Input:** Job type (`training`)
-- **What it does:** Uploads Spark files to GCS staging bucket, creates/reuses Dataproc cluster, submits PySpark job
+- **Input:** Job type (`feature_extraction` or `training`)
+- **What it does:** Uploads Spark files to GCS staging bucket, creates/reuses Dataproc cluster, submits selected PySpark job
 - **Cluster:** 1 master + 2 workers (`e2-standard-4`), auto-deletes after 10 min idle
+- **Two-job workflow:** Run `feature_extraction` first (~12 min), then `training` (~5 min)
 
 ### terraform.yml — Infrastructure Changes
 

@@ -84,7 +84,7 @@ flowchart TB
 | **Core Backend** | `core/` | Data loading with 3-tier cache (`local → GCS → FastF1`), optional Cloudflare Worker proxy for geo-blocked cloud IPs, ML feature engineering, GCS utilities, configuration. |
 | **Streaming — Fast Path** | `streaming/streaming_fast.py` | Pulls from Pub/Sub `f1-timing` + `f1-race-control` subscriptions, converts to InfluxDB line protocol, writes in ~500 ms micro-batches. |
 | **Streaming — Slow Path** | `streaming/streaming_slow.py` | Pulls from Pub/Sub `f1-timing` subscription, batches by driver, calls Model API for predictions, writes results to InfluxDB (~10 s cycle). |
-| **Training Pipeline** | `spark/training_pipeline.py` | PySpark job extracting pre-race and in-race features from 2024–2026 FastF1 data, trains Random Forest models, uploads `.pkl` to GCS. |
+| **Training Pipeline** | `spark/` | Two-job PySpark workflow: (1) `feature_extraction_job.py` extracts features from 2022–2025 FastF1 cache in parallel, (2) `model_training_job.py` trains 3 Random Forest models with GridSearch/RandomizedSearch, uploads `.pkl` to GCS. |
 | **Infrastructure** | `infra/` | Terraform modules: networking, pubsub, storage, compute, dataproc, cloudrun. |
 | **CI/CD** | `.github/workflows/` | 3 workflows: `deploy-vm` (auto on push to main), `deploy-dataproc` (manual), `terraform` (auto on infra changes). |
 

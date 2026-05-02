@@ -30,7 +30,7 @@ Trong những năm gần đây, các đội đua F1 đã đầu tư mạnh vào 
 
 1. **Thu thập và xử lý dữ liệu quy mô lớn**: Tích hợp FastF1 API, xây dựng cache 3 tầng (local, GCS, API) để tối ưu thời gian tải.
 
-2. **Xử lý phân tán với Spark**: Huấn luyện mô hình ML trên dữ liệu lịch sử 2024-2026 với feature engineering pipeline trên Google Dataproc.
+2. **Xử lý phân tán với Spark**: Huấn luyện mô hình ML trên dữ liệu lịch sử 2022-2025 với two-job feature extraction và training pipeline trên Google Dataproc.
 
 3. **Stream processing real-time**: Xây dựng kiến trúc dual-path với Pub/Sub và InfluxDB, đạt latency < 1 giây cho visualization path.
 
@@ -1046,14 +1046,14 @@ Hệ thống đã được triển khai thành công trên GCP project với cá
 - Memory usage: ~200MB per model (3 models = 600MB total)
 
 **Spark Training:**
-- ETL phase: 12 minutes (2024-2026 data)
+- ETL phase: 12 minutes (2022-2025 data, 4 years)
 - Training phase: 3 minutes (3 models sequential)
 - Total job time: 15 minutes on 1+2 cluster
 - Cost per training run: $0.11
 
 ### 10.3 Model Accuracy
 
-Cross-validation results trên historical data (2024-2026):
+Cross-validation results trên historical data (2022-2025):
 
 **Pre-Race Podium Model:**
 - Accuracy: 72%
