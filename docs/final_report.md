@@ -253,22 +253,40 @@ Configuration highlights:
 
 Cluster startup time ~3 phút. Job submission qua `gcloud dataproc jobs submit pyspark` với `--py-files` chứa `core/` dependencies.
 
-### 5.2 Pipeline Feature Engineering
+### 5.2 Two-Job Training Architecture
 
-`spark/training_pipeline.py` extract features từ FastF1 sessions cho 2024-2026 seasons. Pipeline gồm 3 stages:
+Pipeline được tách thành 2 independent Spark jobs:
 
-**Stage 1 - Data Collection:**
+**Job 1 - Feature Extraction** (`spark/feature_extraction_job.py`):
+- Reads FastF1 cache from GCS (zero API calls)
+- Extracts features in parallel across 4 years (2022-2025)
+- Outputs CSVs to GCS for training
+
+**Job 2 - Model Training** (`spark/model_training_job.py`):
+- Reads feature CSVs from GCS
+- Trains 3 Random Forest models with hyperparameter tuning
+- Uploads models to GCS bucket
+
+Benefits:
+- Can re-train models without re-extracting features (~10-15 min savings)
+- Can inspect/validate feature CSVs between jobs
+- Clear separation: data engineering vs machine learning
+
+**Job 1 Process:**
 ```python
-seasons = [2024, 2025, 2026]
-for year in seasons:
-    schedule = fastf1.get_event_schedule(year)
-    for event in schedule:
-        quali = fastf1.get_session(year, event, 'Q')
-        race = fastf1.get_session(year, event, 'R')
-        # Load + cache to GCS
+# Each Spark worker processes one year
+years = [(2022,), (2023,), (2024,), (2025,)]
+df_years = spark.createDataFrame(years, ["Year"])
+df_years = df_years.repartition(4)  # Dynamic partitioning
+
+# Extract pre-race features
+df_pre_race = df_years.mapInPandas(extract_pre_race_features, schema)
+
+# Extract in-race features
+df_in_race = df_years.mapInPandas(extract_in_race_features, schema)
 ```
 
-**Stage 2 - Pre-Race Features:**
+**Pre-Race Features:**
 
 Extracted từ qualifying và FP2 sessions:
 
@@ -303,9 +321,25 @@ Labels (target):
 - **Podium**: 1 if finish position ≤ 3, else 0.
 - **Win**: 1 if finish position = 1, else 0.
 
-### 5.3 Model Training Workflow
+### 5.3 Model Training Workflow (Job 2)
 
-3 Random Forest classifiers được train riêng biệt:
+After feature extraction completes, Job 2 trains 3 Random Forest classifiers:
+
+**Load Features from GCS:**
+```python
+# Read Job 1 outputs
+pre_race_df = spark.read.csv(
+    "gs://{bucket}/processed_features/pre_race_features",
+    header=True, inferSchema=True
+).toPandas()
+
+in_race_df = spark.read.csv(
+    "gs://{bucket}/processed_features/in_race_features",
+    header=True, inferSchema=True
+).toPandas()
+```
+
+**Train Models:**
 
 **Pre-Race Podium Model:**
 ```python
@@ -345,21 +379,22 @@ gcs_client.upload_blob(
 )
 ```
 
-### 5.4 Spark Execution Plan
+### 5.4 Spark Execution và Performance
 
-PySpark job chạy với configuration:
-```python
-spark = SparkSession.builder \
-    .appName("F1_Training") \
-    .config("spark.executor.memory", "4g") \
-    .config("spark.executor.cores", "2") \
-    .config("spark.default.parallelism", "8") \
-    .getOrCreate()
-```
+**Job 1 (Feature Extraction):**
+- Workers: 2× e2-standard-4 processing 4 years in parallel
+- Cache download: Each worker downloads SQLite + year-specific .ff1pkl files
+- Processing: mapInPandas with Pandas UDFs for FastF1 session loading
+- Output: ~680 pre-race rows, ~25,000 in-race rows
+- Runtime: ~10-15 minutes
 
-Data loading sử dụng Spark DataFrame cho parallel read từ GCS cache. Feature engineering apply qua UDFs (user-defined functions) với broadcast variables cho team tier mapping.
+**Job 2 (Model Training):**
+- Driver only: No distributed training (scikit-learn runs on driver node)
+- Hyperparameter tuning: GridSearchCV (5-fold CV) for pre-race, RandomizedSearchCV for in-race
+- Validation: sklearn compatibility check before GCS upload
+- Runtime: ~5-10 minutes
 
-Training không distribute (scikit-learn chạy trên driver node), nhưng data preparation benefit từ Spark parallelism. Với 2 workers × 2 cores, ETL phase hoàn thành trong ~15 phút cho 3 seasons data.
+Total pipeline time: ~20 minutes (vs ~45 minutes for combined job)
 
 ---
 

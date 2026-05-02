@@ -8,6 +8,7 @@ on:
         required: true
         type: choice
         options:
+          - feature_extraction
           - training
 
 permissions:
@@ -80,11 +81,22 @@ jobs:
               --service-account f1-dataproc-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com
           fi
 
+      - name: Submit Feature Extraction Job
+        if: inputs.job_type == 'feature_extraction'
+        run: |
+          gcloud dataproc jobs submit pyspark \
+            gs://${{ env.STAGING_BUCKET }}/spark/feature_extraction_job.py \
+            --cluster ${{ env.CLUSTER_NAME }} \
+            --region ${{ env.REGION }} \
+            --project ${{ env.PROJECT_ID }} \
+            --py-files gs://${{ env.STAGING_BUCKET }}/spark/core_dependencies.zip \
+            -- "${{ env.PROJECT_ID }}"
+
       - name: Submit Model Training Job
         if: inputs.job_type == 'training'
         run: |
           gcloud dataproc jobs submit pyspark \
-            gs://${{ env.STAGING_BUCKET }}/spark/training_pipeline.py \
+            gs://${{ env.STAGING_BUCKET }}/spark/model_training_job.py \
             --cluster ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }} \
             --project ${{ env.PROJECT_ID }} \
