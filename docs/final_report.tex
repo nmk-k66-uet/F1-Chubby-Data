@@ -140,9 +140,9 @@ Hệ thống có 3 data paths chính:
 \begin{lstlisting}[language=Python]
 Streamlit -> core/data_loader.py
   -> Check f1_cache/ (local)
-  -> Check GCS bucket (cloud cache)
+  -> Check GCS bucket (download if found)
   -> Fallback to FastF1 API
-  -> Upload to GCS (background thread)
+  -> Upload to GCS (only if fetched from API)
 \end{lstlisting}
 
 \textbf{Path 2 - Live Race Fast Path} (~500ms):
@@ -206,16 +206,16 @@ Worker proxy chỉ forward request tới official API, không cache hay modify r
 
 \textbf{Tier 2 - GCS Bucket Cache}:
 \begin{itemize}
-    \item Upload từ local cache lên GCS async (background thread).
+    \item Download từ GCS to local cache khi local miss.
     \item Pre-populated với historical data (2018-2026).
-    \item VM download từ GCS on first access nếu local miss.
+    \item Các session được cache sẵn không cần download từ API.
 \end{itemize}
 
 \textbf{Tier 3 - FastF1 API Fallback}:
 \begin{itemize}
     \item Chỉ call API khi cả local và GCS đều miss.
     \item Rate limiting: max 1 request/second.
-    \item Result được upload lên GCS cho lần sau.
+    \item Result được upload lên GCS async (background thread) cho lần sau.
 \end{itemize}
 
 \texttt{GCStorage} class trong \texttt{data\_loader.py} wrap GCS client với graceful degradation: disable GCS nếu authentication fail, fallback to API-only mode.

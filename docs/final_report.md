@@ -169,14 +169,14 @@ Worker proxy chỉ forward request tới official API, không cache hay modify r
 - Hit rate ~95% trong development.
 
 **Tier 2 - GCS Bucket Cache:**
-- Upload từ local cache lên GCS async (background thread).
+- Download từ GCS to local cache khi local miss.
 - Pre-populated với historical data (2018-2026).
-- VM download từ GCS on first access nếu local miss.
+- Các session được cache sẵn không cần download từ API.
 
 **Tier 3 - FastF1 API Fallback:**
 - Chỉ call API khi cả local và GCS đều miss.
 - Rate limiting: max 1 request/second.
-- Result được upload lên GCS cho lần sau.
+- Result được upload lên GCS async (background thread) cho lần sau.
 
 `GCStorage` class trong `data_loader.py` wrap GCS client với graceful degradation: disable GCS nếu authentication fail, fallback to API-only mode.
 
