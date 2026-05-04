@@ -75,9 +75,9 @@ def render_intro_overlay():
     
     Checks session state for 'play_intro' flag and displays video if true.
     Converts video to base64 and injects into modal dialog using JavaScript.
-    
+
     Output: Full-screen video player overlay showing season intro video.
-    Supports video years matching assets/intro/{year}.mp4 format.
+    Supports video years matching assets/Intro/{year}.mp4 format.
     """
     if st.session_state.get('play_intro', False):
         year = st.session_state.get('selected_year', 2026)

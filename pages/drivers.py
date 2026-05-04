@@ -43,16 +43,16 @@ def normalize_name(name):
     return u"".join([c for c in nfkd_form if not unicodedata.combining(c)]).lower().replace(" ", "")
 
 def get_driver_image_b64(first_name, last_name):
-    """Tìm ảnh tay đua trong thư mục assets/drivers/"""
+    """Tìm ảnh tay đua trong thư mục assets/Drivers/"""
     last_norm = normalize_name(last_name)
     first_norm = normalize_name(first_name)
-    path = f"assets/drivers/{first_norm} {last_norm}.avif"
+    path = f"assets/Drivers/{first_norm} {last_norm}.avif"
     b64 = get_image_base64(path)
     if b64: return b64
     return None
 
 def get_team_logo_b64(team_name):
-    """Tìm ảnh logo đội đua trong thư mục assets/teams/"""
+    """Tìm ảnh logo đội đua trong thư mục assets/Teams/ (với fallback assets/teams/)"""
     team_lower = str(team_name).lower().strip()
     possible_paths = [
         f"assets/teams/{team_name}.avif", f"assets/teams/{team_lower}.avif", f"assets/teams/{team_lower.replace(' ', '')}.avif",
